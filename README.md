@@ -4,6 +4,8 @@
 The RF-based secure wireless communication system enables reliable and versatile wireless communication using the **Infineon XC888 microcontroller**, an **LCD display**, a **PS/2 keyboard**, and an **NRF24L01 transceiver**.  
 
 It facilitates wireless data transfer between two systems with additional features such as **battery percentage monitoring** and **clock display**.
+![Alt text](images/proj1.png)
+![Alt text](images/proj2.png)
 
 ---
 
@@ -16,7 +18,7 @@ It facilitates wireless data transfer between two systems with additional featur
 
 ---
 ## Block Diagram
-![ALT TEXT](bk.png)
+![Alt text](images/bd.png)
 ---
 ##  Key Features
 
