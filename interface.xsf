@@ -1,0 +1,3202 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; Written bat Mahmoud Mostafa ;;;;;
+;;;;;;;;  May 2024 ;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; include file xcez1 my Mr.Roggemans M. (MGM) ;;;;;;
+
+; Define constants for LCD commands
+entrymode     EQU    00000110B
+displayon     EQU    00001100B
+displayof     EQU    00001000B
+cursoroff     EQU    00001100B
+cursoronb     EQU    00001111B
+cursoronn     EQU    00001110B
+functions     EQU    00111000B
+cgram         EQU    01000000B
+ddram         EQU    10000000B
+cleardisplay  EQU    00000001B
+
+; Define LCD and ADC ports
+lcdport       EQU    p3_data
+RS            bit    p4_data.5
+e             bit    p4_data.6
+
+; Data storage
+RAM_ADDR            EQU 30h
+battery_percentage  EQU RAM_ADDR
+loopl              EQU 020h ; Used as a memory running light
+div1               EQU 021h ; Auxiliary registers
+div2               EQU 022h ; Ditto
+counter            EQU 023h ; Register to store counter
+hh                 EQU 024h ; Save hours
+mm                 EQU 025h ; Save minutes
+ss                 EQU 026h ; Save seconds
+LCD_CMD_ADDRESS    EQU 0FCh ; Replace with actual LCD command address
+LCD_DATA_ADDRESS   EQU 0FDh ; Replace with actual LCD data address
+cleardisp          EQU    001H ; Clear display command
+cursathom          EQU    002H ; Cursor home command
+
+KBD_DATA  bit P1_data.4
+KBD_CLK   bit P1_data.3     
+
+ascii     EQU 10h
+TEMPVAR   EQU 11h
+count     EQU 12h
+
+; Start of code
+org 0000h
+    ljmp start1
+
+org 000Bh
+    ljmp TIMER0_ISR  ; Timer 0 interrupt vector
+
+start1:
+    mov sp,#7fh
+    lcall initlcd
+    lcall initp4
+    lcall INIT
+    lcall initadc_battery
+    lcall init_timer0
+    mov a,#cleardisplay
+    lcall COMNWRT
+    lcall DELAY
+
+    mov a,#c6h
+    lcall COMNWRT
+    mov dptr,#welcome
+    lcall lcdoutmsga
+    mov a,#55
+    lcall delaya0k05s
+
+    mov a,#cleardisplay
+    lcall COMNWRT
+    lcall DELAY
+
+start:              
+    mov a,#88h
+    lcall COMNWRT
+    mov dptr,#chat
+    lcall lcdoutmsga
+
+    mov a,#c8h
+    lcall COMNWRT
+    mov dptr,#batt
+    lcall lcdoutmsga
+
+    mov a,#9ch
+    lcall COMNWRT
+    mov dptr,#clock
+    lcall lcdoutmsga
+
+    mov a,#d4h
+    lcall COMNWRT
+    mov dptr,#choose
+    lcall lcdoutmsga
+
+    lcall READ_KEY
+    lJMP start
+
+TIMER0_ISR:
+    clr tf0             ; Clear Timer 0 overflow flag
+    lcall CHECK_ESC_KEY ; Check for ESC key
+    reti                ; Return from interrupt
+
+CHECK_ESC_KEY:
+    clr c
+    jb KBD_CLK, no_key_check
+    mov r2, #08h        ; 8 bits per byte
+    mov a, #00h
+read_loop:
+    jnb KBD_CLK, read_loop  ; Wait for KBD_CLK to go low
+    mov c, KBD_DATA         ; Read data bit
+    rlc a                   ; Rotate data bit into accumulator
+    jb KBD_CLK, $           ; Wait for KBD_CLK to go high
+    jnb KBD_CLK, $          ; Wait for KBD_CLK to go low
+    djnz r2, read_loop
+
+    cjne a, #01101110b, no_key_check
+    mov a, #cleardisplay
+    lcall COMNWRT
+    lcall DELAY
+    ljmp start
+
+no_key_check:
+    ret
+
+init_timer0:
+    mov tmod, #01h      ; Timer 0 mode 1 (16-bit timer)
+; For 1/4 second (250 ms), the required count is 65536 - 250000 = -194464 (0xF060)
+    mov th0, #0F0h      ; Load high byte
+    mov tl0, #060h      ; Load low byte
+    setb et0            ; Enable Timer 0 interrupt
+    setb ea             ; Enable global interrupt
+    setb tr0            ; Start Timer 0
+    ret
+
+READ_KEY:
+    MOV TEMPVAR,#03H
+READ_KEY_AGAIN:
+    MOV A,#00H
+    CLR C
+    JB KBD_CLK, $                                 
+    MOV R2, #08h    ; 8 bits per byte
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+ReadByteLoop:
+    MOV C, KBD_DATA; Read data bit
+    RLC A               ; Rotate data bit into accumulator
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    DJNZ R2, ReadByteLoop   ; Loop until all bits are read
+    JNB KBD_CLK,$
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    DJNZ TEMPVAR,READ_KEY_AGAIN
+
+asciiconv:
+PRESS_11:
+    CJNE A,#'h',PRESS_22
+    mov a,#cleardisplay
+    lcall COMNWRT
+    LCALL DELAY
+    mov a,#80h
+    lcall COMNWRT
+    ljmp start_read_3
+
+PRESS_22:
+    CJNE A,#'x',PRESS_33
+    mov a,#cleardisplay
+    lcall COMNWRT
+    LCALL DELAY
+    ljmp batt_loop
+
+PRESS_33:
+    CJNE A,#'d', EXIT                    
+    ljmp loop_clock
+
+EXIT:
+    ret
+
+loop_clock:
+    mov ss,#09h
+    mov hh,#09h
+    mov mm,#Dh
+    mov a,#cleardisplay
+    lcall COMNWRT
+    lcall DELAY
+loop:
+    mov a,#c3h
+    lcall COMNWRT
+
+    mov a,hh
+    lcall hexbcd8
+    lcall lcdoutbyte
+
+    mov a,#':'
+    lcall DATAWRT
+
+    mov a,mm
+    lcall hexbcd8
+    lcall lcdoutbyte
+
+    mov a,#':'
+    lcall DATAWRT
+
+    mov a,ss
+    lcall hexbcd8
+    lcall lcdoutbyte
+
+    inc ss      ; Start with adjusting the seconds
+    mov a,ss    ; Test for 60 (contents of seconds are hex)
+    cjne a,#60,continue
+
+    mov ss,#00h ; Reset value to 0
+    inc mm
+
+    mov a,mm    ; Test for 60 (contents of minutes are hex)
+    cjne a,#60,continue
+
+    mov mm,#00h ; Reset value to 0
+    inc hh
+
+    mov a,hh
+    cjne a,#24,continue
+
+    mov hh,#00h ; Reset value to 0
+continue:
+    mov a,#2
+    lcall delaya0k05s
+
+    mov a,#Dbh
+    lcall COMNWRT
+
+    mov dptr,#back
+    lcall lcdoutmsga
+
+    ljmp loop
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Initialization routines
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+INIT:    
+    lcall delay10us
+    mov A,#functions
+    lcall COMNWRT
+    lcall delay2ms  
+    mov A,#cursoroff
+    lcall COMNWRT 
+    lcall delay2ms  
+    mov A,#displayon
+    lcall COMNWRT 
+    lcall delay2ms  
+    mov A,#entrymode
+    lcall COMNWRT 
+    lcall delay2ms  
+    mov A,#80H 
+    lcall COMNWRT
+    ret
+
+COMNWRT: ; Send command to LCD
+    CLR RS ; RS=0 for command
+    SETB e ; E=1 for high pulse
+    MOV lcdport,A ; Copy reg A to port
+    lcall DELAY
+    CLR e ; E=0 for H-to-L pulse
+    ret
+
+DATAWRT: ; Write data to LCD
+    SETB RS ; RS=1 for data
+    SETB e ; E=1 for high pulse
+    MOV lcdport,A ; Copy reg A to port
+    lcall DELAY
+    CLR e
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LCD output routines
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+lcdoutmsga:
+outmsgalcd1:
+    clr a
+    movc a, @a+dptr
+    jz outmsgalcde
+    lcall DATAWRT
+    inc dptr
+    sjmp outmsgalcd1
+outmsgalcde:
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; outniblcd will convert the low nibble into an ascii code and print it
+; on the LCD screen.
+; the routine does not use registers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+lcdoutnib:
+outniblcd: 
+    push acc
+    push psw
+    anl a,#00fh ; Leave the lowest 4 bits
+    add a,#030h ; Convert to ascii codes 0-9
+    cjne a,#03ah,outniblcd1 ; If larger than this, add another 7
+outniblcd1: 
+    jc outniblcde ; If carry then conversion done
+    add a,#007h ; Convert to uppercase
+outniblcde: 
+    lcall DATAWRT ; To the screen
+    pop psw
+    pop acc
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; lcdoutbyte will print the contents of the battery on the LCD screen.
+; the routine does not use any registers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+lcdoutbyte:
+outbytelcd: 
+    push acc
+    push psw
+    swap a ; Exchange bits
+    lcall outniblcd
+    swap a ; Again
+    lcall outniblcd
+    pop psw
+    pop acc
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Delay routines
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+delaya0k05s: 
+    push acc
+    push psw
+    push b
+delaya0k05s2: 
+    mov b,#050
+delaya0k05s1: 
+    lcall delay1ms
+    djnz b,delaya0k05s1
+    djnz acc,delaya0k05s2
+    pop b
+    pop psw
+    pop acc
+    ret
+
+delay10us:    
+    push acc
+    push psw
+    mov acc,#01ah
+    djnz acc,$
+    pop psw
+    pop acc
+    ret
+
+delay2ms:     
+    lcall delay1ms
+    lcall delay1ms 
+    ret
+
+delay1ms:     
+    push acc
+    push psw
+    mov acc,#100
+delay1ms1:    
+    lcall delay10us
+    djnz acc,delay1ms1
+    pop psw
+    pop acc
+    ret
+
+delay50us:
+    push acc
+    push psw
+    mov acc, #11h
+delay_loop:
+    djnz acc, delay_loop
+    pop psw
+    pop acc
+    ret
+
+;-----------delay subroutine 12.75 milliseconds--------------------    
+DELAY:    
+    MOV R3,#50
+DEL2:    
+    MOV R4,#255
+DEL:    
+    DJNZ R4,DEL
+    DJNZ R3,DEL2
+    RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Initialization of LCD and Ports
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+initlcd:
+    push syscon0
+    mov syscon0, #004h
+    push port_page
+    mov port_page, #000h
+    orl p3_dir, #0ffh
+    pop port_page
+    pop syscon0
+    ret
+
+initp4:
+    push syscon0
+    mov syscon0, #004h
+    push port_page
+    mov port_page, #000h
+    mov p4_dir, #0ffh
+    pop port_page
+    pop syscon0
+    ret
+    
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; hexbcd32 converts a 32-bit hex number into a 32-bit BCD number
+; input: r3,r2,r1,r0 = 32-bit hex number (r3=msb)
+; output: r3,r2,r1,r0 = 32-bit BCD number (r3=msb)
+; The routine uses only r3,r2,r1,r0 of bank 0 (must be selected)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+hexbcd32:
+    push acc           ; Save working registers on the stack
+    push psw
+    push 07h
+    push 06h
+    push 05h
+    push 04h
+    mov r7,#00h        ; Dividing by 10000000
+    mov r6,#98h
+    mov r5,#96h
+    mov r4,#80h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    mov a,r4
+    swap a             ; Bits ready for result
+    mov r7,#00h        ; Dividing by 1000000
+    mov r6,#0fh
+    mov r5,#42h
+    mov r4,#40h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    orl a,r4           ; The high byte is ready, temporarily saved on the stack
+    push acc
+    mov r7,#00h        ; Dividing by 100000
+    mov r6,#01h
+    mov r5,#86h
+    mov r4,#a0h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    mov a,r4
+    swap a             ; Bits ready for result
+    mov r7,#00h        ; Dividing by 10000
+    mov r6,#00h
+    mov r5,#27h
+    mov r4,#10h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    orl a,r4           ; The high byte is ready, temporarily saved on the stack
+    push acc         
+    mov r7,#00h        ; Dividing by 1000
+    mov r6,#00h
+    mov r5,#03h
+    mov r4,#e8h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    mov a,r4
+    swap a             ; Bits ready for result
+    mov r7,#00h        ; Dividing by 100
+    mov r6,#00h
+    mov r5,#00h
+    mov r4,#64h
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    orl a,r4           ; The high byte is ready, temporarily saved on the stack
+    push acc         
+    mov r7,#00h        ; Dividing by 10
+    mov r6,#00h
+    mov r5,#00h
+    mov r4,#0ah
+    lcall div32        ; The remainder can be further divided, quotient needed (4 valid bits)
+    mov a,r4
+    swap a             ; Bits ready for result
+    orl a,r0           ; The high byte is ready, temporarily saved on the stack
+    mov r0,a           ; Transfer results from stack to appropriate registers
+    pop acc
+    mov r1,a
+    pop acc
+    mov r2,a
+    pop acc
+    mov r3,a
+    pop 04h
+    pop 05h
+    pop 06h
+    pop 07h
+    pop psw
+    pop acc
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+batt_loop:    
+    lcall measure       ; Measure the selected channel
+    lcall print
+    mov a, #20
+    lcall delaya0k05s   ; Add a small delay
+    ljmp batt_loop      ; Endless loop
+
+measure:
+    lcall adcbattery
+    anl b, #c0h
+    push acc
+    anl a, #3fh
+    orl a, b
+    rl a
+    rl a
+    mov r0, a
+    pop acc
+    anl a, #c0h
+    rl a
+    rl a
+    mov r1, acc
+    ret
+
+printAsVoltage:
+; Calculate voltage: (ADC * 10) / 1023
+; Adjusting for the voltage divider
+    mov r2, #88h        ; Adjust multiplier to match (ADC * 10)
+    mov r3, #43h        ; The multiplication factor, close to 10.00 (128 * 0.078125) = 9.984375
+    lcall mul16         ; Perform 16-bit multiplication
+
+    mov r4, #00h
+    mov r5, #03h        ; High byte of 1023
+    mov r6, #00h        ; Low byte of 1023
+    mov r7, #00h
+
+    lcall div32         ; Perform 32-bit division
+
+; Convert the result to BCD for display
+    mov a, r4
+    mov r0, acc
+    mov a, r5
+    mov r1, acc
+    mov a, r6
+    mov r2, acc
+    mov a, r7
+    mov r3, acc
+
+    lcall hexbcd32      ; Convert the 32-bit result to BCD
+
+; Display the result on the LCD
+    mov a, r1
+    swap a
+    lcall lcdoutnib
+    mov a, #'.'
+    lcall DATAWRT
+    mov a, r1
+    lcall lcdoutnib
+    mov a, r0
+    lcall lcdoutbyte
+    mov a, #'V'
+    lcall DATAWRT
+    ret
+
+print:    
+    mov a, #80h    
+    lcall COMNWRT
+    lcall printAsVoltage
+    lcall printBatteryPercentage
+
+    mov a,#Dbh
+    lcall COMNWRT
+
+    mov dptr,#back
+    lcall lcdoutmsga
+    ret
+
+printBatteryPercentage:
+; Calculate percentage: ((V_actual * 100) / 7.4)
+; V_actual is in r0:r1 (high byte in r1, low byte in r0)
+
+; Multiply by 100 to get percentage
+    mov r2, #64h    ; Multiplier 100
+    mov r3, #00h
+
+    lcall mul16     ; Perform 16-bit multiplication
+
+; Divide by 7.4 (scaled by 10 to 74)
+    mov r4, #00h
+    mov r5, #4Ah    ; High byte of 74
+    mov r6, #00h    ; Low byte of 74
+    mov r7, #00h
+
+    lcall div32     ; Perform 32-bit division
+
+; Convert the result to BCD for display
+    mov a, r4
+    mov r0, acc
+    mov a, r5
+    mov r1, acc
+    mov a, r6
+    mov r2, acc
+    mov a, r7
+    mov r3, acc
+
+    lcall hexbcd32  ; Convert the 32-bit result to BCD
+
+; Display the result on the LCD
+    mov a,#c0h
+    lcall COMNWRT
+   
+    mov a, r0
+    lcall lcdoutbyte
+    mov a, #'%'
+    lcall DATAWRT
+    ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Initialization of ADC for Battery
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+initadc_battery: 
+    push syscon0
+    mov syscon0, #004h
+    mov adc_page, #000h
+    mov adc_globctr, #10110000b
+    mov adc_inpcr0, #00ah
+    mov adc_prar, #080h
+    mov adc_page, #006h
+    mov adc_crmr1, #001h
+    pop syscon0
+    ret
+
+adcbattery:
+    push syscon0
+    mov syscon0, #004h
+    mov adc_page, #006h
+    mov adc_crpr1, #10000000b
+    mov adc_page, #000h
+    nop
+    nop
+adcbattery1:
+    mov a, adc_globstr
+    jb acc.0, adcbattery1
+    mov adc_page, #002h
+    mov a, adc_resr0h
+    mov b, adc_resr0l
+    pop syscon0
+    ret
+  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                     
+start_read_3:
+    lcall READ_KEY_3
+    ljmp start_read_3
+
+READ_KEY_3:
+    MOV TEMPVAR,#03H
+READ_KEY_AGAIN_3:
+    MOV A,#00H
+    CLR C
+    JB KBD_CLK, $                                 
+    MOV R2, #08h    ; 8 bits per byte
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+ReadByteLoop_3:
+    MOV C, KBD_DATA; Read data bit
+    RLC A               ; Rotate data bit into accumulator
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    DJNZ R2, ReadByteLoop_3   ; Loop until all bits are read
+    JNB KBD_CLK,$
+    JB KBD_CLK,$
+    JNB KBD_CLK,$
+    DJNZ TEMPVAR,READ_KEY_AGAIN_3
+
+asciiconv_3:
+PRESS_A:
+    CJNE A,#10101000b,PRESS_B
+    mov a,#'a'  
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_B:
+    CJNE A,#01001100b,PRESS_C
+    mov a,#'b'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_C:
+    CJNE A,#10000100b,PRESS_D
+    mov a,#'c'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_D:
+    CJNE A,#11000100b,PRESS_E
+    mov a,#'d'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_E:
+    CJNE A,#24H,PRESS_f
+    mov a,#'e'
+    lcall LCD_WRITE_CHAR
+    RET
+  
+PRESS_f:
+    CJNE A,#11010100b ,PRESS_G
+    mov a,#'f'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_G:
+    CJNE A,#00101100b,PRESS_H
+    mov a,#'g'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_H:
+    CJNE A,#11001100b,PRESS_I
+    mov a,#'h'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_I:
+    CJNE A,#11000010b,PRESS_J
+    mov a,#'i'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_J:
+    CJNE A,#11011100b,PRESS_K
+    mov a,#'j'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_K:
+    CJNE A,#42H,PRESS_L
+    mov a,#'k'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_L:
+    CJNE A,#11010010b,PRESS_M
+    mov a,#'l'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_M:
+    CJNE A,#00110010b,PRESS_N
+    mov a,#'m'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_N:
+    CJNE A,#10001100b,PRESS_O
+    mov a,#'n'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_O:
+    CJNE A,#00100010b,PRESS_P
+    mov a,#'o'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_P:
+    CJNE A,#10110010b,PRESS_Q
+    mov a,#'p'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_Q:
+    CJNE A,#00111000b,PRESS_R
+    mov a,#'q'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_R:
+    CJNE A,#10110100b,PRESS_S
+    mov a,#'r'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_S:
+    CJNE A,#11011000b,PRESS_T
+    mov a,#'s'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_T:
+    CJNE A,#00110100b,PRESS_U
+    mov a,#'t'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_U:
+    CJNE A,#3CH,PRESS_V
+    mov a,#'u'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_V:
+    CJNE A,#01010100b,PRESS_W
+    mov a,#'v'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_W:
+    CJNE A,#01011000b,PRESS_X
+    mov a,#'w'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_X:
+    CJNE A,#01000100b,PRESS_Y
+    mov a,#'x'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_Y:
+    CJNE A,#10101100b,PRESS_Z
+    mov a,#'y'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_Z:
+    CJNE A,#10111000b,PRESS_ques
+    mov a,#'z'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_ques:
+    CJNE A,#01011100b,PRESS_back
+    mov a,#'?'
+    lcall LCD_WRITE_CHAR
+    RET 
+
+PRESS_back:
+    CJNE A, #'f', PRESS_enter
+    MOV A, #10h    ; Command to move cursor left
+    ACALL COMNWRT  ; Call the command write subroutine
+    LCALL delay2ms
+    MOV A, #20h    ; ASCII for space (blanking the character)
+    ACALL DATAWRT  ; Call the data write subroutine
+    LCALL delay2ms
+    MOV A, #10h    ; Command to move cursor left again
+    ACALL COMNWRT  ; Call the command write subroutine
+    LCALL delay2ms
+    RET
+
+PRESS_enter:
+    CJNE A, #'Z', PRESS_space
+    MOV A, #95h    ; Command to move to the next line (arbitrary command)
+    LCALL COMNWRT
+    RET
+
+PRESS_space:
+    CJNE A, #10010100b, PRESS_1
+    MOV A, #' '
+    LCALL LCD_WRITE_CHAR
+    RET
+
+PRESS_1:
+    CJNE A,#01101000b,PRESS_2
+    mov a,#'1'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_2:
+    CJNE A,#01111000b,PRESS_3
+    mov a,#'2'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_3:
+    CJNE A,#01100100b,PRESS_4
+    mov a,#'3'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_4:
+    CJNE A,#10100100b,PRESS_5
+    mov a,#'4'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_5:
+    CJNE A,#01110100b,PRESS_6
+    mov a,#'5'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_6:
+    CJNE A,#01101100b,PRESS_7
+    mov a,#'6'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_7:
+    CJNE A,#10111100b,PRESS_8
+    mov a,#'7'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_8:
+    CJNE A,#01111100b,PRESS_9
+    mov a,#'8'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_9:
+    CJNE A,#01100010b,PRESS_0
+    mov a,#'9'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_0:
+    CJNE A,#10100010b,PRESS_ESC1
+    mov a,#'0'
+    lcall LCD_WRITE_CHAR
+    RET
+
+PRESS_ESC1:
+    CJNE A,#01101110b,EXIT1
+    mov a,#cleardisplay
+    lcall COMNWRT
+    LCALL DELAY
+    ljmp start
+
+EXIT1:
+    RET
+
+LCD_WRITE_CHAR:
+; Write character code in register A to the LCD
+    LCALL DATAWRT
+
+; Update cursor position (in register R0)
+    INC R0
+
+; Check if the cursor is at the end of the current line
+    CJNE R0, #20, CONTINUE_WRITE  ; 20 characters per line
+
+; Handle the line jump based on the current line (R1)
+    CJNE R1, #0, CHECK_LINE_2
+
+; Move from line 1 to line 2
+    MOV A, #0xC0  ; DDRAM address for line 2
+    MOV R1, #1
+    SJMP SET_CURSOR
+
+CHECK_LINE_2:
+    CJNE R1, #1, CHECK_LINE_3
+
+; Move from line 2 to line 3
+    MOV A, #0x94  ; DDRAM address for line 3
+    MOV R1, #2
+    SJMP SET_CURSOR
+
+CHECK_LINE_3:
+    CJNE R1, #2, CHECK_LINE_4
+
+; Move from line 3 to line 4
+    MOV A, #0xD4  ; DDRAM address for line 4
+    MOV R1, #3
+    SJMP SET_CURSOR
+
+CHECK_LINE_4:
+; Move from line 4 to line 1
+    MOV A, #0x80  ; DDRAM address for line 1
+    MOV R1, #0
+
+SET_CURSOR:
+; Set the cursor position using COMNWRT
+    LCALL COMNWRT
+    MOV R0, #0  ; Reset cursor position to the beginning of the new line
+
+CONTINUE_WRITE:
+    RET
+
+BUFFER_START EQU 30H                               
+
+ADD_TO_BUFFER:
+    MOV @R0, a
+    inc r0             
+    inc count
+    ret
+                     
+pbuffer:
+    MOV R0, #BUFFER_START  ; Reset R0 to the start of the buffer
+    MOV R1, count          ; Move count to R1 for decrementing in loop
+
+read1_loop:
+    MOV A, @R0             ; Load the key from buffer into accumulator
+    lcall DATAWRT
+    INC R0                 ; Increment buffer pointer to the next key
+    DJNZ R1, read1_loop    ; Decrement count and loop if not zero
+    RET
+
+; Messages to be displayed
+welcome:        DB "Hello!",00h
+chat:           DB "1.Chat",00h
+batt:           DB "2.Battery",00h
+clock:          DB "3.clock",00h
+choose:         DB "Press 1,2 or 3:",00h
+back:           DB "ESC to return",00h
+
+;"#c:\xcez1.inc"
+;*******************************************************************************
+;
+; xcez1.inc is the registerfile/driver package for the XC888 micrcontroller from Infineon.
+;
+; The file contains drivers for various hardware and math applications.
+; In addition all register declarations are added.
+;
+; WARNING:!!!!!!!
+; INCLUDE THIS FILE AT THE END OF THE USER PROGRAM
+;
+; Written by Roggemans M. (MGM) 07/2011 v0.0
+;
+;*******************************************************************************
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; xcez is een board package driver voor het XC888 SBC bord van MGM/dp.
+;
+; De driver bevat subroutines die toelaten de hardware van het SBC bord op een
+; eenvoudige manier te gebruiken:
+;
+; standaard I/O:
+;      initdipswitch        klaar zetten poort 4 voor gebruik met de dipswitch
+;      initftoetsen         klaar zetten 4 functieschakelaars onderaan scherm
+;      initleds             klaar zetten LED's als outputs
+;
+; I2C interface (minimale interface op 100kbit/s) enkel master mode!!
+;      initiic              klaar zetten iic interface
+;      iicstart             genereren van een startconditie op iic poort
+;      iicstop              genereren stop conditie op iic poort
+;      iicinbyteack         lezen van 1 byte met ack (accu=output)
+;      iicinbytenack        lezen van 1 byte met nack (accu=output)
+;      iicoutbyte           schrijven van 1 byte (accu=input, c=waarde ack bit slave)
+;
+; LCD interace 
+;      initlcd              klaar zetten LCD voor gebruik (incl i2c init)
+;      lcdoutchar           schrijven van ascii code (accu=input)
+;      lcdoutbyte           schrijven hex waarde accu naar LCD
+;      lcdoutnib            afdrukken 4 laagste bits accu op LCD
+;      lcdoutmsga           afdrukken ascii string @dptr, tot 000h code
+;      lcdlighton           backlight aan
+;      lcdlightoff          backlight uit
+;      lcdbuzon             buzzer aan
+;      lcdbuzof             buzzer uit
+;
+; Seriële interface (via USB stekker!!)
+;      initsio              klaar zetten seriële poort 9600 baud
+;      siooutchar           afdrukken ascii code (accu=input)
+;      siooutbyte           afdrkken getal in accu 
+;      siooutnib            afdrukken 4 laagste bits accu
+;      siooutmsga           afdrukken ascii string @dptr tot 000h code
+;      sioinchar            inlezen van 1 ascii code in de accu
+;      sioinbufa            inlezen van ascii buffer vanaf adres strtbuf, max 20h karakters!
+;
+; ADC
+;      initadc              klaar zetten ADC voor minimaal gebruik
+;      adclm335             uitlezen lm35 (a-b) bevat resultaat
+;      adcpotmeter          uitlezen van de potmeter (a-b) bevat resultaat
+;
+; Arithmetic:
+;      mul16                vermenigvuldigen 2 16 bit getallen
+;      mul32                vermenigvuldigen 2 32 bit getallen
+;      div16                delen 2 16 bit getallen
+;      div32                delen 2 32 bit getallen
+;      add16                optellen 2 16 bit getallen
+;      add32                optellen 2 32 bit getallen
+;      sub16                verschil 2 16 bit getallen
+;      sub32                verschil 2 32 bit getallen
+;      hexbcd8              omvormen 8 bit hex naar bcd
+;      hexbcd16             omvormen 16 bit hex naar bcd
+;      bcdhex8              omvormen 8 bit bcd naar hex
+;      bcdhex16             omvormen 16 bit bcd naar hex
+;
+; Diverse
+;      delaya0k05s          tijdsvertraging (waarde in accu)*0,05s
+;      delay1ms             tijdsverraging 1 milliseconde
+;      delay10us            tijdsvertraging 10 microseconde
+;      XCsw2xtal            overschakelen rc naar kristal (Pauwels Danny)
+;	mapregs 		selecteer de SFR's in de mapped area
+;	nomapregs            selecteer de SFR's in de non-mapped area
+;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; Dit deel van de driver laat toe de USB verbinding met de PC te gebruiken als
+; een standaard com poort op 9600 baud.
+; De file laat toe om de seriele poort te gebruiken en biedt de standaard
+; monitorroutines zoals die beschikbaar zijn in de MGM monitors voor 8051.
+; De belangrijkste afwijking van de standaard routines is de initsio subroutine.
+; Die laat toe om 9600 baud in te stellen. Dit zal enkel kunnen met het xtal
+; ingeschakeld en met de CPU klok 24 Mhz. Het inschakelen van het XTAL gebeurt
+; NIET door deze routine.
+;
+; Geschreven door Roggemans Marc (MGM) op 07/2010 v0
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+blank         equ    020h          ;ascii code voor een blank
+xoff          equ    013h          ;ascii code xoff caracter (ctrl s)
+ff            equ    00ch          ;ascii code voor nieuw blad
+cr            equ    00dh          ;ascii code voor een wagenterugloop
+lf            equ    00ah          ;ascii code voor volgende lijn
+backsp        equ    008h          ;ascii code voor het bs karakter
+beep          equ    007h          ;ascii code voor een beep
+
+wissen:       db     backsp,blank,backsp,000h    ;string wissen karakter
+;van het scherm
+
+strtbuf       equ     054h         ;start adres van de buffer
+endbuf        equ     07fh         ;laatst gebruikte locatie (kan cr bevatten)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; initsio zal de seriele poort klaar zetten voor gebruik. De baudrate is 9600.
+;
+; Gebruikt geen registers
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+initsio:      push   acc                  ;registers op de stack zetten
+              push   syscon0              ;map bewaren
+              mov    syscon0,#004h        ;hier zit al wat we nodig hebben
+              push   port_page            ;pagina op stack zetten
+              push   scu_page
+              mov    scu_page,#000h       ;pagina 0 system control regs
+; eerst gaan we de pinnen van poort 1 juist zetten:
+;      -p1.0 als input en alt1 selectie
+;      -p1.1 als output en alt2 selectie
+
+              mov    port_page,#002h      ;pagina 2 selecteren
+              anl    p1_altsel0,#11111101b
+              orl    p1_altsel0,#00000001b
+              anl    p1_altsel1,#11111110b
+              orl    p1_altsel1,#00000010b
+              mov    port_page,#000h      ;pagina 0 selecteren
+              anl    p1_dir,#11111110b    ;p1.0=input
+              orl    p1_dir,#00000010b    ;p1.1=output
+
+; Nu moet de baud rate generator ingesteld worden
+; We gaan er van uit dat de systeemklok 24MHz is
+
+              mov    scon,#01010000b      ;UART initialiseren
+
+; LET OP!!!!!!!!!!!!!! eerst BG laden, dan bcon, anders wordt BG waarde niet
+; gebruikt!!
+
+              mov    bg,#155              ;zie 12-13 in XC888 UM
+              mov    bcon,#00010001b
+              pop    scu_page
+              pop    port_page            ;alles terug herstellen
+              pop    syscon0
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOOUTCHAR IS EEN SUBROUTINE DIE EEN KARAKTER VIA DE SERIELE INTERFACE NAAR
+; BUITEN STUURT. DE ROUTINE GEBRUIKT DE ACCU ALS INPUT. DE ROUTINE GAAT NA DAT
+; DE TRANSMITTER LEEG IS ALVORENS HET KARAKTER TE VERSTUREN.
+;
+; de routine gebruikt geen registers.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+siooutchar:
+OUTCHAR:      MOV    SBUF,A        ;KARAKTER VERZENDEN
+OUTCHAR1:     JNB    TI,OUTCHAR1   ;WACHT TOT ZENDER BESCHIKBAAR
+              CLR    TI            ;LAAG MAKEN VAN DE BIT
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOOUTNIB VERZEND DE LAAGSTE VIER BITS NAAR DE SERIELE POORT ONDER DE VORM VAN
+; EEN ASCII CODE. DE ACCU EN DE VLAGGEN WORDEN DOOR DE ROUTINE GEBRUIKT.
+;
+; de routine gebruikt geen registers.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+siooutnib:
+OUTNIB:       push   acc           ;registers op de stack
+              push   psw
+              ANL    A,#00FH       ;AFZONDEREN
+              LCALL  BATRANS       ;OMZETTEN IN ASCII CODE
+              LCALL  OUTCHAR       ;VERSTUREN
+              LCALL  XONXOFF       ;FLOW CONTROL
+              pop    psw           ;registers herstellen
+              pop    acc
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOOUTBYTE ZET DE HEX INHOUD VAN DE ACCU OP DE SERIELE POORT. ALS FLOW CONTROL
+; WORDT XONXOFF GEBRUIKT.
+;
+; de routine gebruikt geen registers.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+siooutbyte:
+OUTBYTE:      push   acc           ;registers op de stack zetten
+              push   psw
+              PUSH   ACC           ;BACK UP NEMEN VAN DE ACCU
+              SWAP   A             ;EERST HOOGSTE DEEL
+              LCALL  OUTNIB        ;NIBBLE NAAR HET SCHERM
+              POP    ACC           ;HERSTELLEN VAN DE ACCU
+              LCALL  OUTNIB        ;NIBBLE NAAR HET SCHERM
+              pop    psw           ;registers herstellen
+              pop    acc
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIODISPDPTR ZET DE HEX INHOUD VAN DE DPTR OP HET SCHERM OP DE HUIDIGE PLAATS
+; VAN DE CURSOR.
+;
+; de routine gebruikt geen registers.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+siodispdptr:
+DISPDPTR:     push   acc           ;registers op de stack zetten
+              push   psw
+              MOV    A,DPH         ;EERST HOOGSTE DEEL OP SCHERM
+              LCALL  OUTBYTE       ;BYTE IN ASCII NAAR HET SCHERM
+              MOV    A,DPL         ;MINST BEDUIDENDE DEEL VERZENDEN
+              LCALL  OUTBYTE       ;WEG ER MEE
+              pop    psw           ;registers herstellen
+              pop    acc
+              RET                  ;EINDE
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOOUTMSGA IS EEN SUBROUTINE, DIE DE ASCII CODES VANAF HET ADRES IN DE DPTR,
+; TOT AAN DE CODE 00H, OP HET SCHERM ZET. HET BERICHT STAAT IN CODE MEMORY.
+;
+; de routine gebruikt geen registers.
+; 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+siooutmsga:
+OUTMSGA:      push   acc           ;alles op de stack zetten
+              push   psw
+              push   dpl
+              push   dph
+outmsga2:     CLR    A             ;ACCU LEEG MAKEN
+              MOVC   A,@A+DPTR     ;EERSTE CODE OPHALEN
+              JZ     OUTMSGA1      ;ALS NUL DAN EINDE
+              LCALL  OUTCHAR       ;KARAKTER NAAR HET SCHERM
+              LCALL  XONXOFF       ;SOFTWARE HANDSHAKE
+              INC    DPTR          ;DPTR AANPASSEN
+              SJMP   OUTMSGA2      ;HERHAAL TOT EINDE
+OUTMSGA1:     pop    dph           ;alles herstellen
+              pop    dpl
+              pop    psw
+              pop    acc
+              RET                  ;EINDE ROUTINE
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; XONXOFF LAAT HET GEBRUIK VAN SOFTWARE HANDSHAKE TOE. DE ROUTINE GAAT NA DAT
+; ER EEN KARAKTER ONTVANGEN WERD. ALS DIT HET XOFF KARAKTER IS BLIJFT DE
+; ROUTINE WACHTEN OP EEN ANDER WILLEKEURIG KARAKTER. DIT LAATSTE WORDT NIET
+; VERDER DOORGEGEVEN.
+;
+; de routine gebruikt geen registers.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+XONXOFF:      push   acc           ;registers op de stack zetten
+              push   psw
+              JBC    RI,XONXOFF1   ;GA NA KARAKTER ONTVANGEN
+XONXOFF2:     pop    psw           ;registers herstellen
+              pop    acc
+              RET                  ;ANDERS EINDE
+XONXOFF1:     MOV    A,SBUF        ;ZO JA, KARAKTER LADEN IN ACCU
+              CJNE   A,#XOFF,XONXOFF2     ;ALS NIET XOFF DAN VERDER
+XONXOFF3:     JBC    RI,XONXOFF2   ;WACHTEN OP WILLEKEURIG KARAKTER
+              SJMP   XONXOFF3      ;EN DAN RIBBE EN DE BIE
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOINCHAR BLIJFT WACHTEN TOTDAT ER EEN KARAKTER ONTVANGEN WERD DOOR DE SERIELE
+; INTERFACE. HET KARAKTER WORDT DOORGEGEVEN IN DE ACCUMULATOR.
+;
+; de routine gebruikt de accu.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+sioinchar:
+INCHAR:       JNB    RI,INCHAR            ;BLIJF WACHTEN OP HET KARAKTER
+              CLR    RI                   ;BIT LAAG MAKEN
+              MOV    A,SBUF               ;KARAKTER IN DE ACCU
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOINBYTE LEEST TWEE ASCII CODES BINNEN EN VORMT ZE OM TOT EEN HEX BYTE.
+; ALS OUTPUT WORDT DE ACCU GEBRUIKT.
+; ALS HET DE TWEE ASCII CODES NIET TOT EEN BYTE OMGEZET KUNNEN WORDEN, ZAL
+; DE CARRY OP 1 GEZET WORDEN.
+;
+; De routine gebruikt de accu, r0 en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+sioinbyte:
+INBYTE:       LCALL  INCHAR               ;EERSTE KARAKTER INLEZEN
+              LCALL  LOWUPTR
+              LCALL  ASCBINTRANS          ;OMZETTEN NAAR HEX GETAL
+              JC     INBYTE1              ;BIJ ERROR AKTIE ONDERNEMEN
+              SWAP   A                    ;IS HOOGSTE NIBBLE
+              MOV    R0,A                 ;ACCU TIJDELIJK BEWAREN
+              LCALL  INCHAR               ;TWEEDE KARAKTER OPHALEN
+              LCALL  LOWUPTR
+              LCALL  ASCBINTRANS          ;OMZETTEN NAAR BIN GETAL
+              JC     INBYTE1              ;BIJ ERROR ....
+              ORL    A,R0                 ;BIJDE GETALLEN SAMEN VOEGEN
+INBYTE1:      RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; SIOINBUFA LEEST EEN ASCII BUFFER BINNEN VIA DE SERIELE POORT. DE ROUTINE LAAT
+; TOE OM FOUTIEVE INGAVEN TE VERBETEREN. HIERVOOR KAN DE BACKSPACE TOETS
+; GEBRUIKT WORDEN. HET STARTADRES VAN DE BUFFER IS STRTBUF. DE LAATSE BYTE
+; HEEFT HET ADRES ENDBUF. ALS DE BUFFER TE VOL, OF TE LEEG, GEMAAKT WORDT,
+; LAAT DE CPU EEN BEEP HOREN. DE ROUTINE GEBRUIKT DE ACCU EN R0. CONTROLE
+; KARAKTERS WORDEN NIET VERWERKT. DE ROUTINE GEEFT OOK EEN ECHO NAAR HET
+; SCHERM. ZE GEBRUIKT DE SUBROUTINES INCHAR, OUTCHAR EN ASCCTR. INBUFA DOET
+; OOK DE OMVORMING NAAR ASCII 0 KARAKTERS. Door de waarden van strtbuf en endbuf
+; aan te passen kan de gebruiker zelf de lengte en de plaats van de buffer
+; bepalen.
+;
+; De routine gebruikt de accu, r0 en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+sioinbufa:
+INBUFA:       MOV    R0,#STRTBUF          ;START ADRES VAN DE BUFFER LADEN
+INBUFA2:      LCALL  INCHAR               ;KARAKTER LEZEN
+              ANL    A,#07FH              ;KARAKTERS OMVORMEN TOT ASCII 0
+; ALVORENS EEN ECHO NAAR HET SCHERM TE VERSTUREN, MOET NAGEGAAN WORDEN DAT HET
+; BEKOMEN KARAKTER AAN DE TE VERWACHTEN KARAKTERS VOLDOET. DE ENIGE TOEGELATEN
+; CONTROLEKARAKTERS ZIJN 'CR' EN 'BACKSPACE'. VOOR AL DE ANDERE KARAKTERS
+; WORDT EEN BEEP NAAR HET SCHERM GESTUURD. DE CONTROLE WORDT DOOR ASCCTR UIT-
+; GEVOERD.
+              LCALL  LOWUPTR              ;WEL EFFE IN CAPS TE ZETTEN
+              CJNE   A,#CR,INBUFA1        ;CR INGEGEVEN?
+              MOV    @R0,A                ;IN GEHEUGEN ZETTEN
+              RET                         ;EINDE VAN DE ROUTINE
+INBUFA1:      CJNE   A,#BACKSP,INBUFA6    ;NAGAAN BACK SPACE INDRUKKEN
+              CJNE   R0,#STRTBUF,INBUFA3  ;STAAT DE BUFFER ONDERAAN,DAN BEEP
+INBUFA4:      MOV    A,#BEEP
+INBUFA7:      LCALL  OUTCHAR
+              SJMP   INBUFA2              ;NIEUW KARAKTER OPHALEN
+INBUFA3:      DEC    R0                   ;ENTRY UIT BUFFER HALEN
+              MOV    DPTR,#wissen         ;WIS KARAKTER DATA NAAR SCHERM
+              LCALL  OUTMSGA
+              SJMP   INBUFA2              ;WACHT OP VOLGENDE INGAVE
+INBUFA6:      LCALL  ASCCTR               ;ALS CARRY DAN NIET GELDIG
+              JC     INBUFA4              ;BEEP NAAR SCHERM
+              CJNE   R0,#ENDBUF-1,INBUFA5 ;BUFFER OP HET EINDE DAN ERROR
+              SJMP   INBUFA4              ;BEEP NAAR HET SCHERM
+INBUFA5:      MOV    @R0,A                ;KARAKTER IN DE BUFFER
+              INC    R0                   ;BUFFER POINTER AANPASSEN
+              SJMP   INBUFA7              ;KARAKTER IN BUFFER, VOLGENDE ?
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; BDELETE HAALT ALLE blank KARAKTERS UIT de inputbuffer
+;
+; De routine gebruikt de accu, r0, r1 en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BDELETE:      MOV    R0,#STRTBUF          ;START ADRES IN R0
+              MOV    R1,#STRTBUF          ;START ADRES IN R1
+BDELETE1:     MOV    A,@R0                ;LEES KARAKTER
+              CJNE   A,#BLANK,BDELETE2    ;KARAKTER GEEN BLANKO,DAN BDELETE2
+BDELETE3:     INC    R0                   ;VOLGENDE KARAKTER OPHALEN
+              CJNE   R0,#ENDBUF+1,BDELETE1 ;ALS NIET EINDE DAN VERDER
+              RET                         ;EINDE VAN DE ROUTINE
+BDELETE2:     MOV    @R1,A                ;KARAKTER NAAR BUFFER STUREN
+              INC    R1
+              SJMP   BDELETE3
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; ASCCTR MOET NAGAAN DAT HET KARAKTER IN DE ACCU BIJ DE STANDAARD KARAKTERS
+; HOORT. ENKEL DE KONTROLEKARAKTERS CR EN BP ZIJN TOEGELATEN. DE ACCU EN DE
+; VLAGGEN WORDEN GEBRUIKT. DE KARAKTERS < 020H EN > DAN 07EH WORDEN ALS FOUT
+; AANZIEN.
+;
+; De routine gebruikt de accu en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ASCCTR:       CJNE   A,#020H,ASCCTR1      ;NAGAAN KARAKTER KLEINER DAN
+ASCCTR1:      JC     ASCCTR3              ;CARRY, DAN ERROR
+              CJNE   A,#07FH,ASCCTR2      ;GROTER DAN 7EH
+ASCCTR2:      JNC    ASCCTR3              ;GEEN CARRY DAN ERROR
+              CLR    C                    ;AANGEVEN GEEN FOUT
+              RET
+ASCCTR3:      SETB   C                    ;AANGEVEN FOUT TOESTAND
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; LOWUPTR ZET HET KARAKTER IN DE ACCU OM VAN LOWER NAAR UPPER CASE. DE ROUTINE
+; GEBRUIKT DE VLAGGEN EN DE ACCU. DE HEX WAARDEN 61H TOT EN MET 7AH MOETEN
+; OMGEZET WORDEN NAAR 41H TOT EN MET 5AH. DE ANDERE GETALLEN MOGEN NIET
+; AANGEPAST WORDEN.
+;
+; De routine gebruikt de accu en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+LOWUPTR:      CJNE   A,#07BH,LOWUPTR1     ;BOVENSTE GRENS
+LOWUPTR1:     JNC    LOWUPTR2             ;GEEN CARRY DAN GEEN OMZETTING
+              CJNE   A,#061H,LOWUPTR3     ;ONDERSTE GRENS NAGAAN
+LOWUPTR3:     JC     LOWUPTR2             ;CARRY DAN GEEN OMZETTING
+              SUBB   A,#020H              ;OMZETTING
+LOWUPTR2:     RET                         ;EINDE OMZETTING
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; BATRANS DOET DE OMZETTING VAN EEN HEX NIBBLE IN DE ACCU NAAR DE PASSENDE
+; ASCII CODE.
+;
+; De routine gebruikt de accu en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BATRANS:      CJNE   A,#00AH,BATRANS1     ;NAGAAN 30 OF 37 MOETEN BIJ OPTELLEN
+BATRANS1:     JC     BATRANS2             ;CARRY=1 DAN SLECHTS 30
+              ADD    A,#007H              ;ANDERS 30+7=37
+BATRANS2:     ADD    A,#030H              ;30 BIJ OPTELLEN
+              RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; ASCBINTRANS ZET HET ASCII KARAKTER IN DE ACCU OM IN EEN BINAIR GETAL. DE
+; ROUTINE KAN ENKEL DE KARAKTERS TUSSEN 0-9 EN A-F VERWERKEN. IN HET ANDERE
+; GEVAL WORDT DE CARRY GEZET.
+;
+; De routine gebruikt de accu en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ASCBINTRANS:  CLR    C                    ;CARRY LAAG MAKEN VOOR BEREKENINGEN
+              SUBB   A,#030H              ;NAGAAN GETAL BINNEN GRENZEN
+              JC     ASCBINTRANS1         ;ALS C=1 DAN FOUT
+              CJNE   A,#00AH,ASCBINTRANS3 ;GETAL TUSSEN 0 EN 9 ?
+ASCBINTRANS3: JC     ASCBINTRANS2         ;ALS CARRY DAN ALLES OK
+              SUBB   A,#007H              ;VERDER MET DE OMZETTING
+              JC     ASCBINTRANS1         ;ALS CARRY DAN ERROR
+              CJNE   A,#010H,ASCBINTRANS4 ;CONTROLE OP TE GROTE GETALLEN
+ASCBINTRANS4: CPL    C                    ;CARRY COMPLEMENTEREN
+              JC     ASCBINTRANS1         ;ALS CARRY DAN FOUT IN HET GETAL
+ASCBINTRANS2: CLR    C                    ;CARRY LAAG MAKEN
+ASCBINTRANS1: RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; ASCII1 ZET HET ASCII KARAKTER @R0 OM IN EEN HEX GETAL IN DE ACCU.
+; DE ROUTINE VERANDERD OOK DE VLAGGEN.
+;
+; De routine gebruikt de accu en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ASCII1:       MOV    A,@R0                ;KARAKTER OPHALEN
+              LCALL  ASCBINTRANS          ;OMZETTING ASCII NAAR BINAIR
+              RET                         ;EINDE OMZETTING
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; ASCII2 ZET TWEE ASCII KARAKTERS @R0 EN @(R0+1) OM NAAR EEN HEX KARAKTER
+; IN DE ACCU. R0 WORDT MET EEN VERHOOGD. R1 WORDT AANGEPAST. ALS OP HET EINDE
+; VAN DE ROUTINE DE CARRY GESET IS, DAN IS DE OMZETTING NIET MOGELIJK.
+;
+; De routine gebruikt de accu, r0, r1 en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ASCII2:       LCALL  ASCII1               ;OMZETTEN
+              JC     ASCII21              ;CARRY 1 DAN OMZETTING NIET MOGELIJK
+              SWAP   A                    ;NIBBLE VAN PLAATS VERANDEREN
+              MOV    R1,A                 ;TIJDELIJK WEG STOPPEN
+              INC    R0                   ;NAAR VOLGENDE KARAKTER WIJZEN
+              LCALL  ASCII1               ;KARAKTER OMZETTEN
+              JC     ASCII21               ;WEG ALS C=1
+              ORL    A,R1                 ;GETALLEN BIJ ELKAAR VOEGEN
+ASCII21:      RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; ASCII4 ZET DE 4 ASCII KARAKTERS @R0 TOT @[R0+3] OM IN EEN HEX GETAL IN DE
+; DATAPOINTER. ALS DE OMZETTING NIET MOGELIJK IS WORDT DE CARRY GEZET.
+; R0 WORDT MET DRIE VERHOOGD, EN DE ACCU WORDT AANGEPAST,ALSOOK R1. ALS OP HET
+; EINDE VAN DE ROUTINE DE CARRY GESET IS, DAN WAS EEN OMZETTING NIET MOGELIJK.
+;
+; De routine gebruikt de accu, r0, r1 en de psw.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ASCII4:       LCALL  ASCII2               ;OMZETTEN EERSTE TWEE ASCII BYTES
+              JC     ASCII41              ;IN GEVAL VAN ERROR DAN WEG
+              MOV    DPH,A                ;HEX GETAL IN DE DPTRH
+              INC    R0                   ;WIIJST NU NAAR VOLGENDE GROEP VAN 2
+              LCALL  ASCII2               ;OMZETTEN VOLGENDE TWEE BYTES
+              JC     ASCII41              ;BIJ FOUT DAN WEG
+              MOV    DPL,A                ;IN DPTR LADEN
+ASCII41:      RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; initadc            is een subroutine die de adc klaar zet voor minimalistisch
+; gebruik De routine zorgt er voor dat de potmeter en de lm335 als analoge inputs
+; geschakeld worden.
+;
+; Gebruikt geen registers
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+initadc:      push   syscon0                     ;map saven
+              mov    syscon0,#004h               ;basis pagina selecteren
+              mov    adc_page,#000h              ;pagina 0 selecteren
+              mov    adc_globctr,#10110000b      ;adc inschakelen                   MUST!!
+;klok delen door 32 (750kHz)
+;10 bit uitkomst
+              mov    adc_inpcr0,#00ah            ;sample time verlengen met x klokpulsen
+; Dit is niet echt nodig, maar hiermee vangen we de hoge impedantie van de potmeter op
+              mov    adc_prar,#080h              ;arbitration slot parallelle arbiratie activeren MUST!!
+              mov    adc_page,#006h              ;adc page 6 selecteren             MUST!!   
+              mov    adc_crmr1,#001h             ;willen onmiddellijke actie        MUST!!
+              pop    syscon0                     ;herstellen syscon
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; adclm335           is een subroutine die de spanning meet die van de lm335 sensor
+; komt. De waarde wordt doorgegeven in a en b registers (kanaal 5).
+;
+; Gebruikt:
+;      -accu als 8 msb meting
+;      -b als 2 lsb meting (links afgelijnd) (b veat verder data van adc_resrxl)
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+adclm335:     push   syscon0
+              mov    syscon0,#004h               ;map kiezen en vorige bewaren
+              mov    adc_page,#006h              ;adc pagina 6 kiezen
+              mov    adc_crpr1,#00100000b        ;kanaal 5 starten
+              mov    adc_page,#000h              ;naar pagina 0 schakelen
+		nop
+		nop					;anders loopt het mis met het testen van de ready bit
+adclm3351:    mov    a,adc_globstr               ;kijken omvorming klaar
+              jb     acc.0,adclm3351
+              mov    adc_page,#002h              ;pagina 2 selecteren
+              mov    a,adc_resr0h                ;uitkomst in accu
+              mov    b,adc_resr0l                ;uitkomst in b
+              pop    syscon0
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; adcpotmeter        is een subroutine die de spanning meet die van de potmeter
+; komt. De waarde wordt doorgegeven in a en b registers (kanaal 4)
+;
+; Gebruikt:
+;      -accu als 8 msb meting
+;      -b als 2 lsb meting (links afgelijnd)
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+adcpotmeter:  push   syscon0
+              mov    syscon0,#004h               ;map kiezen en vorige bewaren
+              mov    adc_page,#006h              ;adc pagina 6 kiezen
+              mov    adc_crpr1,#00010000b        ;kanaal 4 starten
+              mov    adc_page,#000h              ;naar pagina 0 schakelen
+		nop
+		nop					;anders loopt het mis met het testen van de ready bit
+adcpotmeter1: mov    a,adc_globstr               ;kijken omvorming klaar
+              jb     acc.0,adcpotmeter1
+              mov    adc_page,#002h              ;pagina 2 selecteren
+              mov    a,adc_resr0h                ;uitkomst in accu
+              mov    b,adc_resr0l                ;uitkomst in b
+              pop    syscon0
+              
+
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; Dit is het driver gedeelte met de subroutines voor wiskundige berekeningen.
+; Het is niet de bedoeling om de meest compacte code te bekomen. De driver zal
+; ook niet alle gewenste routines bevatten. Hij is geschreven met pedagogische
+; doelstellingen in het achterhoofd. 
+; 
+; De driver bevat routines voor 8 bit bcd naar hex en hex naar bcd omvorming
+; LET OP!!!! de getallen moeten in waarde kleiner dan 100d zijn (zowel hex als
+; bcd)
+;      8bit hex naar bcd
+;      8bit bcd naar hex
+;
+; De driver bevat routines voor de 4 hoofdbewerkingen op 16 bit getallen:
+;      16/16 bit met 16 bit uitkomst en 16 bit rest
+;      16*16 bit met 32 bit uitkomst
+;      16+16 bit met 24 bit uitkomst
+;      16-16 bit met 24 bit uitkomst
+;      16bit hex naar bcd
+;      16bit bcd naar hex
+;
+; De driver bevat routines voor de 4 hoofdbewerkingen op 32 bit getallen:
+;      32/32 bit met 32 bit uitkomst en 32 bit rest
+;      32*32 bit met 64 bit uitkomst
+;      32+32 bit met 40 bit uitkomst
+;      32-32 bit met 40 bit uitkomst
+;
+; de gebruiker moet zorgen dat de berekeningen mogelijk zijn!!!!!!!!!!!!!!!!!!
+; 
+; De routines gebruiken als input en output de huidige registerbank.
+;
+;
+; WAARSCHUWING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+; DEZE ROUTINES GEBRUIKEN 15 BYTES STACK. ZE WERKEN ENKEL ALS DE STACK NIET DE
+; ADRESSEN 70-7c GEBRUIKT. ER WORDEN HIER IMMERS DIRECT ADRESSEERBARE REGISTERS
+; VRIJ GEMAAKT OM IN TE REKENEN.
+; !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+;
+; geschreven door Roggemans Marc (MGM) op 11/2004 uitvoering 51math0.inc
+; Aangepast door Roggmans Marc (MGM) op 07/2010 voor xcez
+;      -routines gebruiken geen MDU!
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Hier worden gpr's verbonden met een naam. Ze worden gebruikt door sommige
+; routines. Omdat ze informatie kunnen bevatten worden ze op de stack gezet.
+
+h0            equ    070h
+h1            equ    071h
+h2            equ    072h
+h3            equ    073h
+h4            equ    074h
+h5            equ    075h
+h6            equ    076h
+h7            equ    077h
+h8            equ    078h
+h9            equ    079h
+h10           equ    07ah
+h11           equ    07bh
+h12           equ    07ch
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; mul32       is de routine die twee 32 bit getallen zal vermenigvuldigen.
+; input:      r3,r2,r1,r0 = eerste getal (r3=msb)
+;             r7,r6,r5,r4 = tweede getal (r7=msb)
+; output:     r7,r6,r5,r4,r3,r2,r1,r0 met r7=msb
+;
+; De routine gebruikt alleen de registers van de huidig geselecteerde bank
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+mul32:        push   acc                  ;registers op de stack zetten
+              push   psw
+              push   h0
+              push   h1
+              push   h2
+              push   h3
+              push   h4
+              push   h5
+              push   h6
+              push   h7
+              push   h8
+              push   h9
+              push   h10
+              push   h11
+              push   h12
+
+; eerst moeten de hulpregisters klaar gezet worden
+
+              mov    h0,#000h
+              mov    h1,#000h
+              mov    h2,#000h
+              mov    h3,#000h
+              mov    h4,#000h
+              mov    h5,#000h
+              mov    h6,#000h
+              mov    h7,#000h
+              mov    h8,#000h
+              mov    h9,#000h
+              mov    h10,#000h
+              mov    h11,#000h
+              mov    h12,#32              ;loopcounter
+
+; volgende lus moet 32 keer doorlopen worden om de berekening te maken
+
+; nu wordt de vermenigvuldiger naar rechts in de carry geshift
+
+mul321:       mov    a,r3
+              rrc    a
+              mov    r3,a
+              mov    a,r2
+              rrc    a
+              mov    r2,a
+              mov    a,r1
+              rrc    a
+              mov    r1,a
+              mov    a,r0
+              rrc    a
+              mov    r0,a                 ;32 bit shift klaar
+
+;als de carry 1 is moet het 64 bit getal h3-r4 opgeteld worden bij h11-h4
+
+              jnc    mul322               ;optelling niet nodig
+
+; hier staat en 64 bit optelling
+
+              mov    a,r4
+              add    a,h4
+              mov    h4,a
+              mov    a,r5
+              addc   a,h5
+              mov    h5,a
+              mov    a,r6
+              addc   a,h6
+              mov    h6,a
+              mov    a,r7
+              addc   a,h7
+              mov    h7,a
+              mov    a,h0
+              addc   a,h8
+              mov    h8,a
+              mov    a,h1
+              addc   a,h9
+              mov    h9,a
+              mov    a,h2
+              addc   a,h10
+              mov    h10,a
+              mov    a,h3
+              addc   a,h11
+              mov    h11,a                ;optelling klaar
+
+; het getal h3-r4 moet met twee vermenigvuldigd worden
+
+mul322:       clr    c                    ;moet op 0 staan
+              mov    a,r4
+              rlc    a
+              mov    r4,a
+              mov    a,r5
+              rlc    a
+              mov    r5,a
+              mov    a,r6
+              rlc    a
+              mov    r6,a
+              mov    a,r7
+              rlc    a
+              mov    r7,a
+              mov    a,h0
+              rlc    a
+              mov    h0,a
+              mov    a,h1
+              rlc    a
+              mov    h1,a
+              mov    a,h2
+              rlc    a
+              mov    h2,a
+              mov    a,h3
+              rlc    a
+              mov    h3,a
+
+              djnz   h12,mul321           ;herhaal 32 keer
+
+; de uitkomst moet in de juiste registers komen
+
+              mov    r0,h4
+              mov    r1,h5
+              mov    r2,h6
+              mov    r3,h7
+              mov    r4,h8
+              mov    r5,h9
+              mov    r6,h10
+              mov    r7,h11               ;klaar
+
+              pop    h12                  ;registers herstellen
+              pop    h11
+              pop    h10
+              pop    h9
+              pop    h8
+              pop    h7
+              pop    h6
+              pop    h5
+              pop    h4
+              pop    h3
+              pop    h2
+              pop    h1
+              pop    h0
+              pop    psw
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; mul16       is de routine die twee 16 bit getallen zal vermenigvuldigen.
+; input:      r1,r0 = eerste getal (r1=msb)
+;             r3,r2 = tweede getal (r3=msb)
+; output:     r3,r2,r1,r0 met r3=msb
+;
+; De routine gebruikt alleen de registers r3, r2, r1, r0 van de huidige bank
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+mul16:        push   acc                  ;registers op de stack zetten
+              push   psw
+              push   h0
+              push   h1
+              push   h2
+              push   h3
+              push   h4
+              push   h5
+              push   h6
+
+; eerst registers laden met startwaarden. h0 en h1 zijn het verlengstuk
+; van r3 en r2. h2, h3, h4, h5 worden gebruikt voor sommatie.
+; h6 is de loopcounter.
+
+              mov    h0,#000h
+              mov    h1,#000h
+              mov    h2,#000h
+              mov    h3,#000h
+              mov    h4,#000h
+              mov    h5,#000h
+              mov    h6,#16               ;loopcounter
+              
+; hier staat de lus die 16 keer doorlopen wordt voor het uitvoeren van de
+; berekening
+
+mul161:       mov    a,r1                 ;getal 1 1*rechts in carry
+              rrc    a
+              mov    r1,a
+              mov    a,r0
+              rrc    a
+              mov    r0,a                 ;ok
+
+; als carry 1 dan h1, h0, r3, r2 optellen bij h5, h4, h3, h2
+
+              jnc    mul162
+
+              mov    a,r2
+              add    a,h2
+              mov    h2,a                 ;32 bit som uitvoeren
+              mov    a,r3
+              addc   a,h3
+              mov    h3,a
+              mov    a,h0
+              addc   a,h4
+              mov    h4,a
+              mov    a,h1
+              addc   a,h5
+              mov    h5,a                 ;klaar
+
+; het te vermenigvuldige getal maal 2 (1*links shiften)
+
+mul162:       clr    c
+              mov    a,r2
+              rlc    a
+              mov    r2,a                 ;ook 32 bit getal
+              mov    a,r3
+              rlc    a
+              mov    r3,a
+              mov    a,h0
+              rlc    a
+              mov    h0,a
+              mov    a,h1
+              rlc    a
+              mov    h1,a                 ;klaar
+
+              djnz   h6,mul161            ;herhaal 16 keer
+
+; de vermenigvuldiging is klaar. Nu uitkomstregisters laden
+
+              mov    r0,h2
+              mov    r1,h3
+              mov    r2,h4
+              mov    r3,h5                ;klaar
+
+
+              pop    h6                   ;registers herstellen
+              pop    h5
+              pop    h4
+              pop    h3
+              pop    h2
+              pop    h1
+              pop    h0
+              pop    psw
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; div32       is de routine die twee 32 bit getallen zal delen (eerste/tweede).
+; input:      r3,r2,r1,r0 = eerste getal (r3=msb)
+;             r7,r6,r5,r4 = tweede getal (r7=msb)
+; output:     r7,r6,r5,r4 = quotient (r7=msb)
+;             r3,r2,r1,r0 = rest (r3=msb)
+;             carry=1 bij delen door 0
+;
+; De routine gebruikt alleen de registers van de huidig geselecteerde bank
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+div32:        push   acc                  ;registers op de stack zetten
+              push   psw
+              push   h0
+              push   h1
+              push   h2
+              push   h3
+              push   h4
+              push   h5
+              push   h6
+              push   h7
+              push   h8
+              push   h9
+              push   h10
+              push   h11
+              push   h12
+
+; eerst alles voorladen
+
+              mov    h0,#000h
+              mov    h1,#000h
+              mov    h2,#000h
+              mov    h3,#000h
+              mov    h4,#000h
+              mov    h5,#000h
+              mov    h6,#000h
+              mov    h7,#000h
+              mov    h8,#000h
+              mov    h9,#000h
+              mov    h10,#000h
+              mov    h11,#000h
+              mov    h12,#32              ;loopcounter
+
+; we gaan het te delen getal in de passende hulpregisters shiften
+
+; deze lus moet 32 keer heraald worden
+
+div321:       mov    a,r0                 ;h3-r0 is te delen getal
+              rlc    a
+              mov    r0,a
+              mov    a,r1
+              rlc    a
+              mov    r1,a
+              mov    a,r2
+              rlc    a
+              mov    r2,a
+              mov    a,r3
+              rlc    a
+              mov    r3,a
+              mov    a,h0
+              rlc    a
+              mov    h0,a
+              mov    a,h1
+              rlc    a
+              mov    h1,a
+              mov    a,h2
+              rlc    a
+              mov    h2,a
+              mov    a,h3
+              rlc    a
+              mov    h3,a
+
+; nu testen of het deeltal in h3-h0 past, tussenuitkomst in h7-h4
+
+              clr    c                    ;zit in de weg
+              mov    a,h0
+              subb   a,r4
+              mov    h4,a
+              mov    a,h1
+              subb   a,r5
+              mov    h5,a
+              mov    a,h2
+              subb   a,r6
+              mov    h6,a
+              mov    a,h3
+              subb   a,r7
+              mov    h7,a
+
+; als er geen carry is, dan is het verschil succesvol, en moeten h3-h0
+; vervangen worden door h7-h4
+
+              jc     div322               ;niet vervangen
+
+              mov    h0,h4
+              mov    h1,h5
+              mov    h2,h6
+              mov    h3,h7                ;vervanging klaar
+
+div322:       cpl    c                    ;dit moet in h11-h8 (uitkomst)
+              mov    a,h8
+              rlc    a
+              mov    h8,a
+              mov    a,h9
+              rlc    a
+              mov    h9,a
+              mov    a,h10
+              rlc    a
+              mov    h10,a
+              mov    a,h11
+              rlc    a
+              mov    h11,a                ;qoutient aangepast
+
+              djnz   h12,div321           ;32 keer herhalen
+
+; de berekening is klaar. uitkomstregisters nog laden
+
+              mov    r4,h8
+              mov    r5,h9
+              mov    r6,h10
+              mov    r7,h11               ;uitkomst geladen
+
+              mov    r0,h0                ;rest laden
+              mov    r1,h1
+              mov    r2,h2
+              mov    r3,h3
+
+              pop    h12                  ;registers herstellen
+              pop    h11
+              pop    h10
+              pop    h9
+              pop    h8
+              pop    h7
+              pop    h6
+              pop    h5
+              pop    h4
+              pop    h3
+              pop    h2
+              pop    h1
+              pop    h0
+              pop    psw
+              pop    acc
+              ret
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; div16       is de routine die twee 16 bit getallen zal delen (eerste/tweede).
+; input:      r1,r0 = eerste getal (r1=msb)
+;             r3,r2 = tweede getal (r3=msb)
+; output:     r3,r2 = quotient (r3=msb)
+;             r1,r0 = rest (r1=msb)
+;             carry=1 bij deling door 0
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+div16:        push   acc                  ;registers op de stack zetten
+              push   psw
+              push   h0
+              push   h1
+              push   h2
+              push   h3
+              push   h4
+              push   h5
+              push   h6
+
+; registers voorladen
+
+              mov    h0,#000h
+              mov    h1,#000h
+              mov    h2,#000h
+              mov    h3,#000h
+              mov    h4,#000h
+              mov    h5,#000h
+              mov    h6,#16               ;loopcounter
+              
+; eerst te delen getal 1*links shiften in hulpregisters
+
+; deze lus moet 16 keer herhaald worden
+
+div161:       mov    a,r0                 ;32 bit shift in h1-r0
+              rlc    a
+              mov    r0,a
+              mov    a,r1
+              rlc    a
+              mov    r1,a
+              mov    a,h0
+              rlc    a
+              mov    h0,a
+              mov    a,h1
+              rlc    a
+              mov    h1,a
+
+; nagaan of in h1-h0 de deler past r3-r2. h3-h2 wordt gebruikt voor
+; het tussenresultaat.
+
+              clr    c
+              mov    a,h0
+              subb   a,r2
+              mov    h2,a
+              mov    a,h1
+              subb   a,r3
+              mov    h3,a
+
+              jc     div162               ;als carry dan h1-h0 niet vervangen
+;door h3,h2
+              mov    h0,h2
+              mov    h1,h3                ;vervanging klaar
+
+; uitkomst moet aangepast worden
+
+div162:       cpl    c                    ;truuk
+              mov    a,h4
+              rlc    a
+              mov    h4,a
+              mov    a,h5
+              rlc    a
+              mov    h5,a
+              djnz   h6,div161            ;16 keer herhalen
+
+; de berekening is klaar. uitkomsten in passende registers
+
+              mov    r2,h4                ;quotient
+              mov    r3,h5
+
+              mov    r0,h0                ;rest
+              mov    r1,h1
+
+              pop    h6                   ;registers herstellen
+              pop    h5
+              pop    h4
+              pop    h3
+              pop    h2
+              pop    h1
+              pop    h0
+              pop    psw
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; add32       zal twee 32 bit getallen optellen en een 40 bit uitkomst.
+;
+; input:      r3,r2,r1,r0 = eerste getal (r3=msb)
+;             r7,r6,r5,r4 = tweede getal (r7=msb)
+; output:     r4,r3,r2,r1,r0 (r4=msb)
+;
+; r4,r3,r2,r1,r0 worden aangepast
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+add32:        push   acc                  ;registers op de stack zetten
+              push   psw
+              mov    a,r0                 ;eerste 8 bit
+              add    a,r4
+              mov    r0,a                 ;klaar
+              mov    a,r1                 ;volgende 8 bit
+              addc   a,r5
+              mov    r1,a                 ;klaar
+              mov    a,r2                 ;volgende 8 bit
+              addc   a,r6
+              mov    r2,a                 ;klaar
+              mov    a,r3                 ;laatste 8 bit
+              addc   a,r7
+              mov    r3,a                 ;32 bit klaar
+              mov    a,#000h
+              addc   a,#000h              ;carry verrekenen
+              mov    r4,a
+              pop    psw                  ;registers herstellen
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; add16       zal twee 16 bit getallen optellen en een 24 bit uitkomst.
+;
+; input:      r1,r0 = eerste getal (r1=msb)
+;             r3,r2 = tweede getal (r3=msb)
+; output:     r2,r1,r0 (r2=msb)
+;
+; r3,r2,r1,r0 worden aangepast
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+add16:        push   acc                  ;geen registers gebruiken behalve rx
+              push   psw
+              mov    a,r0                 ;starten met de optelling
+              add    a,r2                 ;8 bit klaar
+              mov    r0,a                 ;uitkomst wegschrijven
+              mov    a,r1                 ;volgende 8 bit
+              addc   a,r3                 ;16 bit klaar
+              mov    r1,a                 ;uitkomst weggeschreven
+              mov    a,#000h              ;carry verrekenen
+              addc   a,#000h
+              mov    r2,a                 ;24 bit klaar
+              pop    psw                  ;registers herstellen
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; sub32       zal het verschil berekenen van 2 32 bit getallen. De uitkomst is
+;             40 bit groot. (eerste -tweede)
+; input:      r3,r2,r1,r0 = eerste getal (r3=msb)
+;             r7,r6,r5,r4 = tweede getal (r7=msb)
+; output:     r4,r3,r2,r1,r0 (r4=msb)
+;
+; r4,r3,r2,r1,r0 worden aangepast
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+sub32:        push   acc                  ;registers bewaren
+              push   psw                  ;ook de vlaggen
+              clr    c                    ;zit nog effe in de weg
+              mov    a,r0                 ;eerste 8 bit
+              subb   a,r4
+              mov    r0,a
+              mov    a,r1                 ;tweede 8 bit
+              subb   a,r5
+              mov    r1,a
+              mov    a,r2                 ;volgende 8 bit
+              subb   a,r6
+              mov    r2,a
+              mov    a,r3                 ;laatste 8 bit
+              subb   a,r7
+              mov    r3,a
+              mov    a,#000h              ;nu nog de carry
+              subb   a,#000h
+              mov    r4,a                 ;40 bit klaar
+              pop    psw                  ;registers herstellen
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; sub16       zal het verschil berekenen van 2 16 bit getallen. De uitkomst is
+;             24 bit groot. (eerste - tweede)
+; input:      r1,r0 = eerste getal (r1=msb)
+;             r3,r2 = tweede getal (r3=msb)
+; output:     r2,r1,r0 (r2=msb)
+;
+; r3,r2,r1,r0 worden aangepast
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+sub16:        push   acc                  ;registers bewaren
+              push   psw
+              clr    c                    ;mag nog niet meespelen
+              mov    a,r0                 ;eerste 8 bit verschil
+              subb   a,r2
+              mov    r0,a                 ;klaar
+              mov    a,r1
+              subb   a,r3                 ;16 bit klaar
+              mov    r1,a
+              mov    a,#000h
+              subb   a,#000h              ;eventuele carry verrekenen
+              mov    r2,a                 ;24 bit klaar
+              pop    psw                  ;registers herstellen
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; hexbcd16    zet een 16 bit hex getal om in een 24 bit bcd getal
+; input       r1,r0 = 16 bit hex getal (r1=msb)
+; output      r2,r1,r0 =24 bit bcd getal (r2=msb)
+;
+; de routine gebruikt alleen de registers r3,r2,r1,r0 van de huidige bank 
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+hexbcd16:     push   acc                  ;registers effe bewaren op de stack
+              push   psw
+
+              push   h7                   ;nodig
+              push   h8
+
+              push   h9                   ;ook
+
+              mov    h9,#005h             ;loopcounter
+              
+hexbcd161:    mov    r3,#000h
+              mov    r2,#00ah             ;hierdoor delen we
+              lcall  div16                ;deling uitvoeren
+              mov    a,r0                 ;rest
+              push   acc                  ;op stack zetten
+              mov    a,r2
+              mov    r0,a
+              mov    a,r3
+              mov    r1,a                 ;uitkomst terug delen
+              djnz   h9,hexbcd161
+
+              pop    acc                  ;hoogste bits van de stack
+              mov    r2,a                 ;klaar
+              pop    acc
+              swap   a
+              mov    h9,a
+              pop    acc
+              add    a,h9
+              mov    r1,a                 ;volgende 8 klaar
+              pop    acc
+              swap   a
+              mov    h9,a
+              pop    acc
+              add    a,h9
+              mov    r0,a                 ;klaar
+
+              pop    h9                   ;was naar de knoppen
+
+              pop    h8                   ;gebruikt
+              pop    h7
+
+              pop    psw                  ;registers herstellen
+              pop    acc
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; hexbcd8     zet een 8 bit hex getal om in een 8 bit bcd getal
+; input       a (maximale waarde = 63h)
+; output      a
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+hexbcd8:      push   psw                  ;registers op stack zetten
+              push   b
+              mov    b,#00ah              ;hierdoor delen
+              div    ab                   ;in accu qoutient in b rest
+              swap   a
+              add    a,b                  ;bcd getal klaar
+              pop    b
+              pop    psw
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; bcdhex16    zal een 16 bit bcd getal omzetten naar een hex getal.
+; input:       r1,r0 = 16 bit bcd getal (r1=msb)
+; output:      r1,r0 = 16 bit hex getal (r1=msb)
+;
+; de routine gebruikt r1,r0 van de huidige bank
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bcdhex16:     push   b                    ;hebben we nodig
+              push   acc
+              push   psw
+
+              mov    a,r0
+              anl    a,#00fh              ;eenheden
+              push   acc                  ;effe bewaren
+
+              mov    a,r0
+              swap   a
+              anl    a,#00fh              ;tientallen
+              mov    b,#00ah              ;waarde berekenen
+              mul    ab                   ;klaar
+              pop    b                    ;truukje
+              add    a,b                  ;a is lage deel hex getal
+              push   acc                  ;straks nodig
+
+              mov    a,r1                 ;hoge deel 
+              anl    a,#0f0h
+              swap   a
+              push   acc                  ;straks nodig
+
+              mov    a,r1
+              anl    a,#00fh              ;gaan we verder bewerken
+              mov    b,#100               ;waarde uitrekenen
+              mul    ab
+              mov    r1,b
+              mov    r0,a
+
+              pop    acc
+              mov    b,#10
+              mul    ab                   ;kan nog in a
+              mov    b,#100               ;*10*100=*1000
+              mul    ab
+              add    a,r0
+              mov    r0,a
+              mov    a,r1
+              addc   a,b
+              mov    r1,a
+
+              pop    acc
+              add    a,r0
+              mov    r0,a
+              mov    a,#000h
+              addc   a,r1
+              mov    r1,a                 ;klaar
+
+              pop    psw
+              pop    acc
+              pop    b
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; bcdhex8     zal een 8 bit bcd getal omzetten naar een hex getal.
+; input:      a (maximale waarde 99h)
+; output:     a
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bcdhex8:      push   psw                  ;registers op de stack zetten
+              push   b
+              push   h0
+              mov    h0,a                 ;effe bewaren
+              anl    h0,#00fh             ;alleen 4 laagste bits
+              anl    a,#0f0h              ;hier alleen 4 hoogste bits
+              swap   a
+              mov    b,#00ah              ;berekenen waarde 4 hoogste bits
+              mul    ab
+              add    a,h0                 ;eenheden bijtellen
+              pop    h0
+              pop    b
+              pop    psw
+              ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; xcsw2xtal          schakeld overvan de inwendige oscillator naar een extern kristal.
+;
+; Gebruikt geen registers 
+; 
+; Originele auteur: Danny Pawels (dp)
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+XCsw2xtal:  push  dph
+            push  dpl
+            push  psw
+            push  syscon0
+            push  port_page
+            push  scu_page
+
+            mov   syscon0,#04h            ;selecteer RMAP0
+            mov   scu_page,#1             ;page 1 van SCU selecteren
+ 
+            orl   pll_con,#00001000b      ;VCOBYP=1  bypass de PLL
+;freq= VCO-free running =5MHz...20MHz?  
+            orl   pll_con,#00000100b      ;OSCDISC=1 disconnect osc. en PLL
+            anl   osc_con,#11110111b      ;XPD=0  externe osc. power-up
+            orl   osc_con,#00000100b      ;OSCSS=1 externe oscillator selecteren 
+
+            mov   dptr,#0f000h            ;wacht tot externe osc stabiel is...
+XCsw2xtal0: inc   dptr
+            mov   a,dpl
+            orl   a,dph
+            jnz   XCsw2xtal0       
+            
+XCsw2xtal1: orl   osc_con,#00000010b      ;ORDRES=1 osc run detectie starten
+             
+;wacht,...dit kan lang duren... tot >2048 VCO cycli...     
+XCsw2xtal2: mov   a,osc_con               ;check OSCR en ORDRES bits (2 LSB's osc_con)
+            jb    acc.1,XCsw2xtal2        ;Osc.RunDETect klaar? ='0'
+;Oscillator run detectie is klaar...
+            jnb    acc.0,XCsw2xtal1       ;OSCR=1? ja, dan oscillator running... 
+            
+
+            mov   a,pll_con               ;lees pll_con
+            anl   a,#0fh                  ;maskeer onderste bits
+            orl   a,#10100000b            ;stel NDIV in op 1010=waarde 24
+;OPGELET: het password moet worden gegeven, dan kan er gedurende 32cclk cycli naar
+;beveiligde locaties worden geschreven zoals NDIV en KDIV van de PLL, de watchdog
+;enable bit WDTEN en de power-down en slow down enable bits PD en SD !!!! 
+            mov   passwd,#98h             ;het is nodig het password in te stellen!!!
+;bij aanpassing van de NDIV van de PLL
+            mov   pll_con,a               ;N=24 is nodig bij een 8MHz xtal
+            anl   pll_con,#11111011b      ;OSCDISC=0 connect osc en PLL
+            orl   pll_con,#00000010b      ;RESLD=1 restart PLL lock detection
+            
+XCsw2xtal3: mov   a,pll_con               ;check de LOCK bit (lsb van dit register)
+            jb    acc.0,XCsw2xtal3        ;ga pas verder als PLL gelocked is op osc.                          
+            
+            anl   pll_con,#11110111b      ;VCOBYP=0 fsys is PLL gelockte frequentie.
+            orl   osc_con,#00010000b      ;OSCPD=1 interne osc. power-down
+            
+            pop   scu_page                ;herstel controller status
+            pop   port_page               
+            pop   syscon0
+            pop   psw
+            pop   dpl
+            pop   dph
+            ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; mapregs	selecteer de SFR's in de mapped area
+;
+;
+; Past syscon SFR aan
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+mapregs:	orl   syscon0,#00000001b	;set bit rmap
+		ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; nomapregs	selecteer de SFR's in de non-mapped area
+;
+; Past syscon SFR aan
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+nomapregs:  anl    syscon0,#11111110b	;clear bit rmap
+		ret
+
+;*******************************************************************************
+;
+; These are the register declarations for the XC888 microcontroller from
+; Infineon. 
+;
+;*******************************************************************************
+
+;*******************************************************************************
+;
+; CPU registers are accessible independend of paging and mapping
+; (always accessible)
+;
+;*******************************************************************************
+
+sp            data   081h          ;stack pointer                     reset=007h
+dpl           data   082h          ;datapointer low register          reset=000h
+dph           data   083h          ;datapointer high register         reset=000h
+pcon          data   087h          ;power control                     reset=000h
+tcon          data   088h          ;timer 0-1 control                 reset=000h
+;tcon is bit addressable
+       tf1    bit    08fh
+       tr1    bit    08eh
+       tf0    bit    08dh
+       tr0    bit    08ch
+       ie1    bit    08bh
+       it1    bit    08ah
+       ie0    bit    089h
+       it0    bit    088h
+
+tmod          data   089h          ;timer 0-1 mode                    reset=000h
+tl0           data   08ah          ;timer 0 low                       reset=000h
+tl1           data   08bh          ;timer 1 low                       reset=000h
+th0           data   08ch          ;timer 0 high                      reset=000h
+th1           data   08dh          ;timer 1 high                      reset=000h
+
+syscon0       data   08fh          ;system control register 0         reset=004h
+scon          data   098h          ;serial channel 0 control          reset=000h
+;scon is bit addressable
+       sm0    bit    09fh
+       sm1    bit    09eh
+       sm2    bit    09dh
+       ren    bit    09ch
+       tb8    bit    09bh
+       rb8    bit    09ah
+       ti     bit    099h
+       ri     bit    098h
+
+sbuf          data   099h          ;serial data buffer channel 0
+eo            data   0a2h          ;extended operation                reset=000h
+ien0          data   0a8h          ;interrupt enable 0                reset=000h
+;ien0 is bit addressable
+       ea     bit    0afh
+;bit not implemented
+       et2    bit    0adh
+       es     bit    0ach
+       et1    bit    0abh
+       ex1    bit    0aah
+       et0    bit    0a9h
+       ex0    bit    0a8h
+
+ip            data   0b8h          ;interrupt priotity                reset=000h
+;ip is bit addressable
+;bit not implemented
+;bit not implemented
+       pt2    bit    0bdh
+       ps     bit    0bch
+       pt1    bit    0bbh
+       px1    bit    0bah
+       pt0    bit    0b9h
+       px0    bit    0b8h
+
+iph           data   0b9h          ;interrupt priority high           reset=000h
+psw           data   0d0h          ;program status word               reset=000h
+;psw is bit addressable
+       cy     bit    0d7h
+       ac     bit    0d6h
+       f0     bit    0d5h
+       rs1    bit    0d4h
+       rs0    bit    0d3h
+       ov     bit    0d2h
+       f1     bit    0d1h
+       p      bit    0d0h
+
+acc           data   0e0h          ;accumulator                       reset=000h
+;acc is bit addressable
+
+ien1          data   0e8h          ;interrupt enable 1                reset=000h
+;ien1 is bit addressable
+       eccip3 bit    0efh
+       eccip2 bit    0eeh
+       eccip1 bit    0edh
+       eccip0 bit    0ech
+       exm    bit    0ebh
+       ex2    bit    0eah
+       essc   bit    0e9h
+       eadc   bit    0e8h
+
+b             data   0f0h          ;b register                        reset=000h
+;b is bit addressable
+
+ip1           data   0f8h          ;interrupt priority 1              reset=000h
+;ip1 is bit addressable
+       pccip3 bit    0ffh
+       pccip2 bit    0feh
+       pccip1 bit    0fdh
+       pccip0 bit    0fch
+       pxm    bit    0fbh
+       px2    bit    0fah
+       pssc   bit    0f9h
+       padc   bit    0f8h
+
+iph1          data   0f9h          ;interrupt priority 1 high         reset=000h
+
+
+;*******************************************************************************
+;
+; system control registers registers that can only be accessed in the non
+; mapped memory area (rmap=0) page independent
+;
+;*******************************************************************************
+
+scu_page      data   0bfh          ;page register scu                 reset=000h
+
+;*******************************************************************************
+;
+; system control registers registers that can only be accessed in the non
+; mapped memory area (rmap=0) and page 0
+;
+;*******************************************************************************
+
+modpisel      data   0b3h          ;peripheral input select           reset=000h
+ircon0        data   0b4h          ;interrupt request register        reset=000h
+ircon1        data   0b5h          ;interrupt request register        reset=000h
+ircon2        data   0b6h          ;interrupt request register        reset=000h
+exicon0       data   0b7h          ;external interrupt control        reset=0f0h
+exicon1       data   0bah          ;external interrupt control        reset=03fh
+nmicon        data   0bbh          ;nimi control                      reset=000h
+nmisr         data   0bch          ;nmi status                        reset=000h
+bcon          data   0bdh          ;baud rate control                 reset=000h
+bg            data   0beh          ;baud rate timer reload            reset=000h
+fdcon         data   0e9h          ;fractional devider control        reset=000h
+fdstep        data   0eah          ;fractional devider reload         reset=000h
+fdres         data   0ebh          ;fractional divider result         reset=000h
+
+;*******************************************************************************
+;
+; system control registers registers that can only be accessed in the non
+; mapped memory area (rmap=0) and page 1
+;
+;*******************************************************************************
+
+id            data   0b3h          ;identity register     reset=device dependent
+pmcon0        data   0b4h          ;power mode control                reset=000h
+pmcon1        data   0b5h          ;power mode control                reset=000h
+osc_con       data   0b6h          ;osc control                       reset=008h
+pll_con       data   0b7h          ;pll control                       reset=090h
+cmcon         data   0bah          ;clock control                     reset=010h
+passwd        data   0bbh          ;password register                 reset=007h
+feal          data   0bch          ;flash error register              reset=000h
+feah          data   0bdh          ;flash error address high          reset=000h
+cocon         data   0beh          ;clock output control              reset=000h
+misc_con      data   0e9h          ;miscellaneous control             reset=000h
+
+;*******************************************************************************
+;
+; system control registers registers that can only be accessed in the non
+; mapped memory area (rmap=0) and page 3
+;
+;*******************************************************************************
+
+xaddrh        data   0b3h          ;on chip xram address high         reset=0f0h
+ircon3        data   0b4h          ;interrupt request register        reset=000h
+ircon4        data   0b5h          ;interrupt request register        reset=000h
+modpisel1     data   0b7h          ;peripheral input select 1         reset=000h
+modpisel2     data   0bah          ;peripheral input select 2         reset=000h
+pmcon2        data   0bbh          ;power mode control 2              reset=000h
+modsusp       data   0bdh          ;mudule suspend control            reset=001h
+
+;*******************************************************************************
+;
+; port registers accessed in non mapped memory area (rmap=0) page independent
+;
+;*******************************************************************************
+
+port_page     data   0b2h          ;port page register                reset=000h
+
+;*******************************************************************************
+;
+; port registers accessed in non mapped memory area (rmap=0) page 0
+;
+;*******************************************************************************
+
+p0_data       data   080h          ;port 0 data register              reset=000h
+;p0_data is bit addressable
+p0_dir        data   086h          ;port 0 direction register         reset=000h
+p1_data       data   090h          ;port 1 data register              reset=000h
+;p1_data is bit addressable
+p1_dir        data   091h          ;port 1 direction register         reset=000h
+p2_data       data   0a0h          ;port 2 data register              reset=000h
+;p2_data is bit addressable
+p2_dir        data   0a1h          ;port 2 direction register         reset=000h
+p3_data       data   0b0h          ;port 3 data register              reset=000h
+;p3_data is bit addressable
+p3_dir        data   0b1h          ;port 3 direction register         reset=000h
+p4_data       data   0c8h          ;port 4 data register              reset=000h
+;p4_data is bit addressable
+p4_dir        data   0c9h          ;port 4 direction register         reset=000h
+p5_data       data   092h          ;port 5 data register              reset=000h
+p5_dir        data   093h          ;port 5 direction register         reset=000h
+
+;*******************************************************************************
+;
+; port registers accessed in non mapped memory area (rmap=0) page 1
+;      
+;*******************************************************************************
+
+p0_pudsel     data   080h          ;port 0 pull-up/down select        reset=0ffh
+;p0_data is bit addressable
+p0_puden      data   086h          ;port 0 pull-up/down enable        reset=0c4h
+p1_pudsel     data   090h          ;port 1 pull-up/down select        reset=0ffh
+;p1_data is bit addressable
+p1_puden      data   091h          ;port 1 pull-up/down enable        reset=0ffh
+p2_pudsel     data   0a0h          ;port 2 pull-up/down select        reset=0ffh
+;p2_data is bit addressable
+p2_puden      data   0a1h          ;port 2 pull-up/down enable        reset=000h
+p3_pudsel     data   0b0h          ;port 3 pull-up/down select        reset=0bfh
+;p3_data is bit addressable
+p3_puden      data   0b1h          ;port 3 pull-up/down enable        reset=040h
+p4_pudsel     data   0c8h          ;port 4 pull-up/down select        reset=0ffh
+;p4_data is bit addressable
+p4_puden      data   0c9h          ;port 4 pull-up/down enable        reset=004h
+p5_pudsel     data   092h          ;port 5 pull-up/down select        reset=0ffh
+p5_puden      data   093h          ;port 5 pull-up/down enable        reset=0ffh
+
+;*******************************************************************************
+;
+; port registers accessed in non mapped memory area (rmap=0) page 2
+;      
+;*******************************************************************************
+
+p0_altsel0    data   080h          ;port 0 alternate select           reset=000h
+;p0_data is bit addressable
+p0_altsel1    data   086h          ;port 0 alternate select           reset=000h
+p1_altsel0    data   090h          ;port 1 alternate select           reset=000h
+;p1_data is bit addressable
+p1_altsel1    data   091h          ;port 1 alternate select           reset=000h
+p3_altsel0    data   0b0h          ;port 3 alternate select           reset=000h
+;p3_data is bit addressable
+p3_altsel1    data   0b1h          ;port 3 alternate select           reset=000h
+p4_altsel0    data   0c8h          ;port 4 alternate select           reset=000h
+;p4_data is bit addressable
+p4_altsel1    data   0c9h          ;port 4 alternate select           reset=000h
+p5_altsel0    data   092h          ;port 5 alternate select           reset=000h
+p5_altsel1    data   093h          ;port 5 alternate select           reset=000h
+
+;*******************************************************************************
+;
+; port registers accessed in non mapped memory area (rmap=0) page 3
+;      
+;*******************************************************************************
+
+p0_od         data   080h          ;port 0 open drain control         reset=000h
+;p0_data is bit addressable
+p1_od         data   090h          ;port 0 open drain control         reset=000h
+;p1_data is bit addressable
+p3_od         data   0b0h          ;port 0 open drain control         reset=000h
+;p3_data is bit addressable
+p4_od         data   0c8h          ;port 0 open drain control         reset=000h
+;p4_data is bit addressable
+p5_od         data   092h          ;port 0 open drain control         reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page independent
+;
+;*******************************************************************************
+
+adc_page      data   0d1h          ;adc page register                 reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 0
+;
+;*******************************************************************************
+
+adc_globctr   data   0cah          ;global control register           reset=030h
+adc_globstr   data   0cbh          ;global status register            reset=000h
+adc_prar      data   0cch          ;priority and arbitration          reset=000h
+adc_lcbr      data   0cdh          ;limit check boundary              reset=0b7h
+adc_inpcr0    data   0ceh          ;input class 0 register            reset=000h
+adc_etrcr     data   0cfh          ;external trigger control          reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 1
+;
+;*******************************************************************************
+
+adc_chctr0    data   0cah          ;channel control register          reset=000h
+adc_chctr1    data   0cbh          ;channel control register          reset=000h
+adc_chctr2    data   0cch          ;channel control register          reset=000h
+adc_chctr3    data   0cdh          ;channel control register          reset=000h
+adc_chctr4    data   0ceh          ;channel control register          reset=000h
+adc_chctr5    data   0cfh          ;channel control register          reset=000h
+adc_chctr6    data   0d2h          ;channel control register          reset=000h
+adc_chctr7    data   0d3h          ;channel control register          reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 2
+;
+;*******************************************************************************
+
+adc_resr0l    data   0cah          ;result register 0 low             reset=000h
+adc_resr0h    data   0cbh          ;result register 0 high            reset=000h
+adc_resr1l    data   0cch          ;result register 1 low             reset=000h
+adc_resr1h    data   0cdh          ;result register 1 high            reset=000h
+adc_resr2l    data   0ceh          ;result register 2 low             reset=000h
+adc_resr2h    data   0cfh          ;result register 2 high            reset=000h
+adc_resr3l    data   0d2h          ;result register 3 low             reset=000h
+adc_resr3h    data   0d3h          ;result register 3 high            reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 3
+;
+;*******************************************************************************
+
+adc_resra0l   data   0cah          ;result register 0 l view          reset=000h
+adc_resra0h   data   0cbh          ;result register 0 h view          reset=000h
+adc_resra1l   data   0cch          ;result register 1 l view          reset=000h
+adc_resra1h   data   0cdh          ;result register 1 h view          reset=000h
+adc_resra2l   data   0ceh          ;result register 2 l view          reset=000h
+adc_resra2h   data   0cfh          ;result register 2 h view          reset=000h
+adc_resra3l   data   0d2h          ;result register 3 l view          reset=000h
+adc_resra3h   data   0d3h          ;result register 3 h view          reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 4
+;
+;*******************************************************************************
+
+adc_rcr0      data   0cah          ;result control register           reset=000h
+adc_rcr1      data   0cbh          ;result control register           reset=000h
+adc_rcr2      data   0cch          ;result control register           reset=000h
+adc_rcr3      data   0cdh          ;result control register           reset=000h
+adc_vfcr      data   0ceh          ;valid flag clear register         reset=000h
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 5
+;
+;*******************************************************************************
+
+adc_chinfr    data   0cah          ;channel interrupt flag register   reset=000h
+adc_chincr    data   0cbh          ;channel interrupt clear register  reset=000h
+adc_chinsr    data   0cch          ;channel interrupt set register    reset=000h
+adc_chinpr    data   0cdh          ;channel interrupt node pointrer   reset=000h
+adc_evinfr    data   0ceh          ;event interrupt flag register     reset=000h
+adc_evincr    data   0cfh          ;event interrupt clear flag reg.   reset=000h
+adc_evinsr    data   0d2h          ;event interrupt set flag register reset=000h
+adc_evinpr    data   0d3h          ;event interrupt node pointer reg. reset=000h      
+
+;*******************************************************************************
+;
+; adc registers accessed in non mapped memory area (rmap=0) page 6
+;
+;*******************************************************************************
+
+adc_crcr1     data   0cah          ;conversion request control        reset=000h
+adc_crpr1     data   0cbh          ;conversion request pending        reset=000h
+adc_crmr1     data   0cch          ;conversion request mode           reset=000h
+adc_qmr0      data   0cdh          ;queue mode                        reset=000h
+adc_qsr0      data   0ceh          ;queue status register             reset=020h
+adc_q0r0      data   0cfh          ;queue 0 register 0                reset=000h
+adc_qbur0     data   0d2h          ;queue backup register             reset=000h
+adc_qinr0     data   0d3h          ;queue input register              reset=000h
+
+;*******************************************************************************
+
+; timer 2 registers accessed in non mapped memory area (rmap=0)
+;
+;*******************************************************************************
+
+t2_t2con      data   0c0h          ;timer 2 control register          reset=000h
+;t2_t2con is bit addressable
+       tf2    bit    0c7h   
+       exf2   bit    0c6h
+;2 bits are not implemented
+       exen2  bit    0c3h
+       tr2    bit    0c2h
+       ct2    bit    0c1h
+       cprl2  bit    0c0h
+
+t2_t2mod      data   0c1h          ;timer 2 mode register             reset=000h
+t2_rc2l       data   0c2h          ;timer 2 reload/capture low        reset=000h
+t2_rc2h       data   0c3h          ;timer 2 rel/cap high              reset=000h
+t2_t2l        data   0c4h          ;timer 2 register low              reset=000h
+t2_t2h        data   0c5h          ;timer 2 register high             reset=000h
+
+;*******************************************************************************
+;
+; ccu6 registers are accessed in non mapped memory (rmap=0) page independent
+;
+;*******************************************************************************
+
+ccu6_page     data   0a3h          ;ccu6 page register                reset=000h
+
+;*******************************************************************************
+;
+; ccu6 registers are accessed in non mapped memory (rmap=0) page 0
+;
+;*******************************************************************************
+
+ccu6_cc63srl  data   09ah          ;cap/comp shadow channel 63        reset=000h
+ccu6_cc63srh  data   09bh          ;cap/comp shadow channel 63        reset=000h
+ccu6_tctr4l   data   09ch          ;timer control low                 reset=000h
+ccu6_tctr4h   data   09dh          ;timer control high                reset=000h
+ccu6_mcmoutsl data   09eh          ;multichannel mode output shadow   reset=000h
+ccu6_mcmoutsh data   09fh          ;multichannel mode output shadow   reset=000h
+ccu6_isrl     data   0a4h          ;cap/com interrupt status          reset=000h
+ccu6_isrh     data   0a5h          ;cap/com interrupt status          reset=000h
+ccu6_cmpmodifl       data   0a6h   ;compare state modification reg.   reset=000h
+ccu6_cmpmodifh       data   0a7h   ;compare state modification reg.   reset=000h
+ccu6_cc60srl  data   0fah          ;cap/comp shadow channel 60        reset=000h
+ccu6_cc60srh  data   0fbh          ;cap/comp shadow channel 60        reset=000h
+ccu6_cc61srl  data   0fch          ;cap/comp shadow channel 61        reset=000h
+ccu6_cc61srh  data   0fdh          ;cap/comp shadow channel 61        reset=000h
+ccu6_cc62srl  data   0feh          ;cap/comp shadow channel 62        reset=000h
+ccu6_cc62srh  data   0ffh          ;cap/comp shadow channel 62        reset=000h
+
+;*******************************************************************************
+;
+; ccu6 registers are accessed in non mapped memory (rmap=0) page 1
+;
+;*******************************************************************************
+
+ccu6_cc63rl   data   09ah          ;cap/comp register channel 63      reset=000h
+ccu6_cc63rh   data   09bh          ;cap/comp register channel 63      reset=000h
+ccu6_t12prl   data   09ch          ;timer 12 period register          reset=000h
+ccu6_t12prh   data   09dh          ;timer 12 period register          reset=000h
+ccu6_t13prl   data   09eh          ;timer 13 period register          reset=000h
+ccu6_t13prh   data   09fh          ;timer 13 period register          reset=000h
+ccu6_t12dtcl  data   0a4h          ;timer 12 dead time control        reset=000h
+ccu6_t12dtch  data   0a5h          ;timer 12 dead time control        reset=000h
+ccu6_tctr0l   data   0a6h          ;timer control                     reset=000h
+ccu6_tctr0h   data   0a7h          ;timer control                     reset=000h
+ccu6_cc60rl   data   0fah          ;cap/comp register channel 60      reset=000h
+ccu6_cc60rh   data   0fbh          ;cap/comp register channel 60      reset=000h
+ccu6_cc61rl   data   0fch          ;cap/comp register channel 61      reset=000h
+ccu6_cc61rh   data   0fdh          ;cap/comp register channel 61      reset=000h
+ccu6_cc62rl   data   0feh          ;cap/comp register channel 62      reset=000h
+ccu6_cc62rh   data   0ffh          ;cap/comp register channel 62      reset=000h
+
+;*******************************************************************************
+;
+; ccu6 registers are accessed in non mapped memory (rmap=0) page 2
+;
+;*******************************************************************************
+
+ccu6_t12msell data   09ah          ;t12 cap/comp mode select          reset=000h
+ccu6_t12mselh data   09bh          ;t12 cap/comp mode select          reset=000h
+ccu6_ienl     data   09ch          ;cap/comp interrupt enable         reset=000h
+ccu6_ienh     data   09dh          ;cap/comp interrupt enable         reset=000h
+ccu6_inpl     data   09eh          ;cap/comp interrupt node pointer   reset=040h
+ccu6_inph     data   09fh          ;cap/comp interrupt node pointer   reset=039h
+ccu6_issl     data   0a4h          ;cap/comp interruopt status        reset=000h
+ccu6_issh     data   0a5h          ;cap/comp interruopt status        reset=000h
+ccu6_pslr     data   0a6h          ;passive state level register      reset=000h
+ccu6_mcmctr   data   0a7h          ;multi channel mode control        reset=000h
+ccu6_tctr2l   data   0fah          ;timer control register            reset=000h
+ccu6_tctr2h   data   0fbh          ;timer control register            reset=000h
+ccu6_modctrl  data   0fch          ;modulation control                reset=000h
+ccu6_modctrh  data   0fdh          ;modulation control                reset=000h
+ccu6_trpctrl  data   0feh          ;trap control register             reset=000h
+ccu6_trpctrh  data   0ffh          ;trap control register             reset=000h
+
+;*******************************************************************************
+;
+; ccu6 registers are accessed in non mapped memory (rmap=0) page 3
+;
+;*******************************************************************************
+
+ccu6_mcmoutl  data   09ah          ;multi channel mode output         reset=000h
+ccu6_mcmouth  data   09bh          ;multi channel mode output         reset=000h
+ccu6_isl      data   09ch          ;cap/comp interrupt status         reset=000h
+ccu6_ish      data   09dh          ;cap/comp interrupt status         reset=000h
+ccu6_pisel0l  data   09eh          ;port input selection register     reset=000h
+ccu6_pisel0h  data   09fh          ;port input selection register     reset=000h
+ccu6_pisel2   data   0a4h          ;port input selection register     reset=000h
+ccu6_t12l     data   0fah          ;timer 12 register                 reset=000h
+ccu6_t12h     data   0fbh          ;timer 12 register                 reset=000h
+ccu6_t13l     data   0fch          ;timer 13 register                 reset=000h
+ccu6_t13h     data   0fdh          ;timer 13 register                 reset=000h
+ccu6_cmpstatl data   0feh          ;compare state register            reset=000h
+ccu6_cmpstath data   0ffh          ;compare state register            reset=000h
+
+;*******************************************************************************
+;
+; ssc registers can be accessed in the standard memory map (rmap=0)
+;
+;*******************************************************************************
+
+ssc_pisel     data   0a9h          ;port input select                 reset=000h
+ssc_conl      data   0aah          ;control register programming mode reset=000h
+ssc_conh      data   0abh          ;control register programming mode reset=000h
+ssc_tbl       data   0ach          ;transmitter buffer                reset=000h
+ssc_rbl       data   0adh          ;receiver buffer                   reset=000h
+ssc_brl       data   0aeh          ;baud rate timer                   reset=000h
+ssc_brh       data   0afh          ;baud rate timer                   reset=000h
+
+;*******************************************************************************
+;
+; can registers can be accessed in the standard memory map (rmap=0)
+;
+;*******************************************************************************
+
+adcon         data   0d8h          ;adres/data control                reset=000h
+; adcon is bit addressable
+       v3     bit    0dfh
+       v2     bit    0deh
+       v1     bit    0ddh
+       v0     bit    0dch
+       auad1  bit    0dbh
+       auad0  bit    0dah
+       can_bsy bit   0d9h
+       rwen   bit    0d8h
+
+adl           data   0d9h          ;adres register low                reset=000h
+adh           data   0dah          ;adres register low                reset=000h
+data0         data   0dbh          ;can data                          reset=000h
+data1         data   0dch          ;can data                          reset=000h
+data2         data   0ddh          ;can data                          reset=000h
+data3         data   0deh          ;can data                          reset=000h
+
+;*******************************************************************************
+;
+; mdu registers can only be accessed in the mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+mdustat       data   0b0h          ;mdu status register               reset=000h
+;mdustat is bit addressable
+;5 bits are not implemented
+       bsy    bit    0b2h
+       ierr   bit    0b1h
+       irdy   bit    0b0h
+
+mducon        data   0b1h          ;mdu control                       reset=000h
+md0           data   0b2h          ;mdu operand register              reset=000h
+mr0           data   0b2h          ;mdu result register               reset=000h
+md1           data   0b3h          ;mdu operand register              reset=000h
+mr1           data   0b3h          ;mdu result register               reset=000h
+md2           data   0b4h          ;mdu operand register              reset=000h
+mr2           data   0b4h          ;mdu result register               reset=000h
+md3           data   0b5h          ;mdu operand register              reset=000h
+mr3           data   0b5h          ;mdu result register               reset=000h
+md4           data   0b6h          ;mdu operand register              reset=000h
+mr4           data   0b6h          ;mdu result register               reset=000h
+md5           data   0b7h          ;mdu operand register              reset=000h
+mr5           data   0b7h          ;mdu result register               reset=000h
+
+;*******************************************************************************
+;
+; cordic registers can only be accessed in the mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+cd_cordxl     data   09ah          ;cordic x data low                 reset=000h
+cd_cordxh     data   09bh          ;cordic x data high                reset=000h
+cd_cordyl     data   09ch          ;cordic y data low                 reset=000h
+cd_cordyh     data   09dh          ;cordic y data high                reset=000h
+cd_cordzl     data   09eh          ;cordic z data low                 reset=000h
+cd_cordzh     data   09fh          ;cordic z data high                reset=000h
+cd_statc      data   0a0h          ;cordic status and control         reset=000h
+;cd_statc is bit addressable
+       keepz  bit    0a7h
+       keepy  bit    0a6h
+       keepx  bit    0a5h
+       dmap   bit    0a4h
+       int_en bit    0a3h
+       eoc    bit    0a2h
+       error  bit    0a1h
+       cd_bsy bit    0a0h
+
+cd_con        data   0a1h          ;cordic control register           reset=000h
+
+;*******************************************************************************
+;
+; wdt registers can be accessed in the mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+wdtcon        data   0bbh          ;watchdog timer control            reset=000h
+wdtrel        data   0bch          ;watchdog timer reload             reset=000h
+wdtwinb       data   0bdh          ;wdt window boundry count          reset=000h
+wdtl          data   0beh          ;wdt register low                  reset=000h
+wdth          data   0bfh          ;wdt register high                 reset=000h
+
+;*******************************************************************************
+;
+; t21 registers can be accessed in the mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+t21_t2con     data   0c0h          ;timer 21 control register         reset=000h
+;t2_t2con is bit addressable bits are aalready defined
+;tf2    bit    0c7h   
+;exf2   bit    0c6h
+;2 bits are not implemented
+;exen2  bit    0c3h
+;tr2    bit    0c2h
+;ct2    bit    0c1h
+;cprl2  bit    0c0h
+
+t21_t2mod      data   0c1h          ;timer 21 mode register           reset=000h
+t21_rc2l       data   0c2h          ;timer 21 rel/cap low             reset=000h
+t21_rc2h       data   0c3h          ;timer 21 rel/cap high            reset=000h
+t21_t2l        data   0c4h          ;timer 21 register low            reset=000h
+t21_t2h        data   0c5h          ;timer 21 register high           reset=000h
+
+;*******************************************************************************
+;
+; uart1 registers can be accessed in the mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+scon1         data   0c8h          ;sirial channel 1 control          reset=000h
+;s1con is bit addressable
+       sm01   bit    0cfh
+       sm11   bit    0ceh
+       sm21   bit    0cdh
+       ren1   bit    0cch
+       tb81   bit    0cbh
+       rb81   bit    0cah
+       ti1    bit    0c9h
+       ri1    bit    0c8h
+       
+sbuf1         data   0c9h          ;serial channel 1 data             reset=000h
+bcon1         data   0cah          ;baud rate control register        reset=000h
+bg1           data   0cbh          ;baud rate timer reload            reset=000h
+fdcon1        data   0cch          ;fractional devider control        reset=000h
+fdstep1       data   0cdh          ;fractional devider reload         reset=000h
+fdres1        data   0ceh          ;fractional devider result         reset=000h
+
+;*******************************************************************************
+;
+; ocds registers can be accessed in mapped memory area (rmap=1)
+;
+;*******************************************************************************
+
+mmcr2         data   0e9h          ;monitor mode control              reset=01-h
+mmcr          data   0f1h          ;monitor control                   reset=000h
+mmsr          data   0f2h          ;monitor mode status               reset=000h
+mmbpcr        data   0f3h          ;breakpoints control register      reset=000h
+mmicr         data   0f4h          ;monitor mode interrupt control    reset=000h
+mmdr          data   0f5h          ;monitor mode data transfer        reset=000h
+hwbpsr        data   0f6h          ;hardware breakpoints select       reset=000h
+hwbpdr        data   0f7h          ;hardware breakpoints data         reset=000h
+mmwr1         data   0ebh          ;monitor work register 1           reset=000h
+mmwr2         data   0ech          ;monitor work register 2           reset=000h
+
+;end directive must be used, but has no signification
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
