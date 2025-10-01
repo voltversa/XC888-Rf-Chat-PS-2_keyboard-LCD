@@ -1,4 +1,8 @@
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; Written by VoltVersa (VV) ;;;;;
+;;;;;;;;  May 2023 ;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; include file xcez1 by Mr.Roggemans M. (MGM) ;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                               
 
        ;Program for LCD intefacing to 8051 Microcontroller
@@ -384,7 +388,7 @@ initnrfe:
 
 
     mov a, #04h                ; SETUP_RETR register
-    mov b, #0Fh                ; Auto retransmit delay = 250µs, count = 15
+    mov b, #0Fh                ; Auto retransmit delay = 250Âµs, count = 15
     lcall spiwrite2b            ; Write 2 bytes to SETUP_RETR
 
     mov a, #05h                ; RF_CH register
@@ -654,5 +658,6 @@ pop 01h                       ;r1 restore
 ret
 
 #include	"c:\xcez1.inc"
+
 
  
