@@ -1,4 +1,10 @@
- ;Define constants for LCD commands
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; Written by VoltVersa (VV) ;;;;;
+;;;;;;;;  May 2023 ;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;; include file xcez1 by Mr.Roggemans M. (MGM) ;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;Define constants for LCD commands
 entrymode     EQU    00000110B
 displayon     EQU    00001100B
 displayof     EQU    00001000B
@@ -348,6 +354,7 @@ hexbcd32:	push	acc			;werkregisters op de stack
 
 
 #include "c:\xcez1.inc"
+
 
 
 
