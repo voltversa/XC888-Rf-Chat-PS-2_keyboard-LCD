@@ -1,7 +1,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;; Written bat Mahmoud Mostafa ;;;;;
+;;;;;;;; Written by ViceVersa ;;;;;
 ;;;;;;;;  May 2024 ;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;; include file xcez1 my Mr.Roggemans M. (MGM) ;;;;;;
+;;;;;;;; include file xcez1 by Mr.Roggemans M. (MGM) ;;;;;;
 
 ; Define constants for LCD commands
 entrymode     EQU    00000110B
@@ -1007,4 +1007,5 @@ choose:         DB "Press 1,2 or 3:",00h
 back:           DB "ESC to return",00h
 
 #include "c:\xcez1.inc"
+
 
