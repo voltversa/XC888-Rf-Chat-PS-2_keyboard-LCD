@@ -1,4 +1,4 @@
-       ;Program for LCD intefacing to 8051 Microcontroller
+   ;Program for LCD intefacing to 8051 Microcontroller
 RS      bit     p4_data.5    ; Register select pin
 e      bit      p4_data.6    ; Enable pin
 
@@ -54,7 +54,7 @@ lcdport       EQU    p3_data
                ljmp loop
 
 
-PRESS_1:        DB "PLEASE PRESS ANY",00h
+PRESS_1:        DB "PLEASE PRESS ANY Button",00h
 
 ;----------------------------------------------
 INIT:	
@@ -256,4 +256,5 @@ EXIT:
 
                         RET
                 
+
 #include	"c:\xcez1.inc"
